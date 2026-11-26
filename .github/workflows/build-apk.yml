@@ -203,7 +203,7 @@ jobs:
           fi
 
           ASSET_DIR="$(mktemp -d "${RUNNER_TEMP}/release-asset-XXXXXX")"
-          ASSET_NAME="${SAFE_REPO_NAME}-debug-build-${GITHUB_RUN_NUMBER}.apk"
+          ASSET_NAME="latest-apk.apk"
           ASSET_PATH="${ASSET_DIR}/${ASSET_NAME}"
 
           cp -- "$SOURCE_APK" "$ASSET_PATH"
@@ -239,8 +239,8 @@ jobs:
             exit 1
           fi
 
-          RELEASE_TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          RELEASE_TITLE="Debug APK Build #${GITHUB_RUN_NUMBER}"
+          RELEASE_TAG="latest-apk"
+          RELEASE_TITLE="latest-apk"
 
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
           echo "release_title=${RELEASE_TITLE}" >> "$GITHUB_OUTPUT"
@@ -259,13 +259,25 @@ jobs:
           EOF
           )"
 
-          if ! gh release create "$RELEASE_TAG" "$ASSET_PATH" \
-            --target "$GITHUB_SHA" \
-            --title "$RELEASE_TITLE" \
-            --notes "$RELEASE_NOTES" \
-            --latest; then
-            echo "::warning::GitHub Release creation failed for tag ${RELEASE_TAG}. The APK build and Actions artifact (app-debug-apk) remain available."
-            exit 1
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            if ! gh release upload "$RELEASE_TAG" "$ASSET_PATH" --clobber || \
+               ! gh release edit "$RELEASE_TAG" \
+                 --target "$GITHUB_SHA" \
+                 --title "$RELEASE_TITLE" \
+                 --notes "$RELEASE_NOTES" \
+                 --latest; then
+              echo "::warning::Failed to update GitHub Release ${RELEASE_TAG}. The APK build and Actions artifact (app-debug-apk) remain available."
+              exit 1
+            fi
+          else
+            if ! gh release create "$RELEASE_TAG" "$ASSET_PATH" \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes "$RELEASE_NOTES" \
+              --latest; then
+              echo "::warning::GitHub Release creation failed for tag ${RELEASE_TAG}. The APK build and Actions artifact (app-debug-apk) remain available."
+              exit 1
+            fi
           fi
 
       - name: Report APK download result
@@ -280,8 +292,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          EFFECTIVE_TAG="${RELEASE_TAG:-debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}}"
-          EFFECTIVE_TITLE="${RELEASE_TITLE:-Debug APK Build #${GITHUB_RUN_NUMBER}}"
+          EFFECTIVE_TAG="${RELEASE_TAG:-latest-apk}"
+          EFFECTIVE_TITLE="${RELEASE_TITLE:-latest-apk}"
           EFFECTIVE_ASSET="${ASSET_NAME:-}"
 
           PUBLISH_VERIFIED="false"
