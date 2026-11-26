@@ -94,9 +94,47 @@ jobs:
           fi
           echo "Temporary debug keystore verified at ${KEYSTORE_PATH}."
 
+      - name: Prepare Firebase google-services.json
+        id: prepare_firebase_config
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          CONFIG_PATH="app/google-services.json"
+
+          if [[ -f "$CONFIG_PATH" && -s "$CONFIG_PATH" ]] && ! grep -q "remixed-project-id" "$CONFIG_PATH"; then
+            echo "Found valid app/google-services.json in repository."
+            echo "created_from_secret=false" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${GOOGLE_SERVICES_JSON:-}" ]]; then
+            TRIMMED_START="$(printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '\r\n\t ' | cut -c1)"
+            if [[ "$TRIMMED_START" == "{" ]]; then
+              printf '%s' "$GOOGLE_SERVICES_JSON" > "$CONFIG_PATH"
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > "$CONFIG_PATH"
+            fi
+
+            if ! python3 -c "import json; d=json.load(open('${CONFIG_PATH}')); assert 'project_info' in d and 'client' in d" 2>/dev/null; then
+              rm -f "$CONFIG_PATH"
+              echo "::error::GOOGLE_SERVICES_JSON secret is not valid Firebase google-services.json (raw JSON or base64-encoded JSON)."
+              exit 1
+            fi
+
+            echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON repository secret."
+            echo "created_from_secret=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Missing app/google-services.json! Without it, the built APK fails on your phone with 'Default FirebaseApp is not initialized'. Copy app/google-services.json from AI Studio and save it in GitHub under Settings -> Secrets and variables -> Actions -> New repository secret named GOOGLE_SERVICES_JSON, then re-run this workflow."
+            exit 1
+          fi
+
       - name: Build debug APK
         shell: bash
         run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Clean up temporary Firebase config
+        if: ${{ always() && steps.prepare_firebase_config.outputs.created_from_secret == 'true' }}
+        shell: bash
+        run: rm -f app/google-services.json
 
       - name: Verify debug APK
         shell: bash
