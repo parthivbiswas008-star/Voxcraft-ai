@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.GeminiVoiceRepository
+import com.example.audio.AudioClonePreprocessor
 import com.example.audio.LiveRecordingState
 import com.example.audio.LocalAudioEngine
 import com.example.audio.SavedAudioClip
@@ -632,13 +633,33 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         if (state.analysisState is CloneAnalysisState.Analyzing) return
 
         viewModelScope.launch {
-            _cloneLab.update { it.copy(analysisState = CloneAnalysisState.Analyzing) }
+            _cloneLab.update {
+                it.copy(analysisState = CloneAnalysisState.Analyzing("Scanning audio & extracting clearest speech…"))
+            }
             try {
-                val bytes = withContext(Dispatchers.IO) { sample.file.readBytes() }
+                val fingerprint = withContext(Dispatchers.IO) {
+                    AudioClonePreprocessor.prepareVoiceFingerprint(
+                        audioFile = sample.file,
+                        originalMimeType = sample.mimeType,
+                        sourceDurationMs = sample.durationMs,
+                        cacheDir = getApplication<Application>().cacheDir,
+                        onStage = { stage ->
+                            _cloneLab.update {
+                                it.copy(analysisState = CloneAnalysisState.Analyzing(stage))
+                            }
+                        }
+                    )
+                }
+
                 val dna = geminiVoiceRepository.analyzeVoiceSample(
-                    audioBytes = bytes,
-                    mimeType = sample.mimeType,
-                    preferredLanguage = state.targetLanguage
+                    audioBytes = fingerprint.bytes,
+                    mimeType = fingerprint.mimeType,
+                    preferredLanguage = state.targetLanguage,
+                    onStageUpdate = { stage ->
+                        _cloneLab.update {
+                            it.copy(analysisState = CloneAnalysisState.Analyzing(stage))
+                        }
+                    }
                 )
                 val resolvedLang = findLanguageByNameOrCode(dna.detectedLanguageCode)
                 _cloneLab.update {
@@ -900,9 +921,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     companion object {
         fun formatDuration(ms: Long): String {
             val totalSeconds = (ms / 1000L).coerceAtLeast(0L)
-            val mins = totalSeconds / 60L
+            val hours = totalSeconds / 3600L
+            val mins = (totalSeconds % 3600L) / 60L
             val secs = totalSeconds % 60L
-            return String.format("%02d:%02d", mins, secs)
+            return if (hours > 0L) {
+                String.format("%02d:%02d:%02d", hours, mins, secs)
+            } else {
+                String.format("%02d:%02d", mins, secs)
+            }
         }
     }
 }

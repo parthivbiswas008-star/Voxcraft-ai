@@ -28,6 +28,7 @@ import org.json.JSONObject
 
 private const val TAG = "GeminiVoiceRepo"
 private const val TTS_MODEL_NAME = "gemini-3.1-flash-tts-preview"
+private const val FAST_PROFILER_MODEL_NAME = "gemini-3.5-flash-lite"
 private const val ANALYSIS_MODEL_NAME = "gemini-3.8-flash"
 
 data class SynthesizedAudioPayload(
@@ -42,50 +43,59 @@ class GeminiVoiceRepository {
         Firebase.ai.generativeModel(modelName = ANALYSIS_MODEL_NAME)
     }
 
+    // Lean, flat JSON schema (avoids heavy multi-enum grammar stalls during mobile audio profiling)
     private val voiceAnalysisSchema by lazy {
         Schema.obj(
             properties = mapOf(
                 "suggestedName" to Schema.string(
-                    description = "A sleek 2-3 word studio voice name capturing the speaker persona"
+                    description = "Short 2-3 word studio voice name"
                 ),
-                "closestBaseVoice" to Schema.enumeration(
-                    values = VoiceCatalog.geminiVoiceNames,
-                    description = "Single closest matching Gemini neural voice anchor matching speaker gender, pitch register, warmth, and grain"
+                "closestBaseVoice" to Schema.string(
+                    description = "Single closest matching Gemini voice name from the allowed list"
                 ),
                 "detectedLanguage" to Schema.string(
-                    description = "The primary spoken language detected from the audio clip (e.g. Bengali (India), Bengali (Bangladesh), Hindi, English (India), English (US), Spanish)"
+                    description = "Detected primary spoken language name"
                 ),
-                "detectedLanguageCode" to Schema.enumeration(
-                    values = SupportedStudioLanguages.map { it.code },
-                    description = "Matching BCP-47 language code for the detected spoken language"
+                "detectedLanguageCode" to Schema.string(
+                    description = "BCP-47 language code such as bn-IN, bn-BD, hi-IN, en-US, en-IN"
                 ),
                 "detectedAccent" to Schema.string(
-                    description = "Exact regional accent & dialect detected from listening to the speaker's pronunciation, vowel coloration, and stress patterns (e.g. Kolkata Bengali accent, Dhaka Bengali accent, Mumbai Hindi accent, South Indian English, British RP, Southern US)"
+                    description = "Exact regional accent and dialect heard in the audio"
                 ),
                 "pitchDescriptor" to Schema.string(
-                    description = "Speaker vocal gender & register, e.g. Warm Male Baritone, Crisp Female Alto, Deep Bass-Baritone, Bright Tenor"
+                    description = "Vocal gender and register e.g. Warm Male Baritone or Crisp Female Alto"
                 ),
                 "paceDescriptor" to Schema.string(
-                    description = "Speaking rhythm and pause cadence, e.g. Measured Storyteller, Rapid Conversational, Relaxed Melodic"
+                    description = "Speaking rhythm and cadence e.g. Measured Storyteller"
                 ),
                 "timbreSummary" to Schema.string(
-                    description = "Concise one-sentence biometric summary of vocal texture, resonance, nasal/chest balance, and speaker identity"
+                    description = "One-sentence summary of vocal texture, resonance, and speaker identity"
                 ),
                 "acousticDnaPrompt" to Schema.string(
-                    description = "Hyper-detailed speaker imitation & accent preservation directive describing exact regional accent, consonant/vowel articulation, pitch contour, vocal weight, breath texture, micro-pauses, and cadence so synthesized speech faithfully mirrors this exact speaker"
+                    description = "Concise speaker imitation directive preserving exact regional accent, pitch contour, vocal weight, breath texture, and cadence"
                 ),
                 "tags" to Schema.array(
                     items = Schema.string(),
-                    description = "3 short descriptive style tags"
+                    description = "3 short style tags"
                 ),
                 "defaultSpeed" to Schema.double(
-                    description = "Speaker's natural speaking speed multiplier between 0.75 and 1.35"
+                    description = "Natural speaking speed multiplier between 0.75 and 1.35"
                 )
             )
         )
     }
 
-    private val voiceProfilerModel by lazy {
+    private val fastVoiceProfilerModel by lazy {
+        Firebase.ai.generativeModel(
+            modelName = FAST_PROFILER_MODEL_NAME,
+            generationConfig = generationConfig {
+                responseMimeType = "application/json"
+                responseSchema = voiceAnalysisSchema
+            }
+        )
+    }
+
+    private val backupVoiceProfilerModel by lazy {
         Firebase.ai.generativeModel(
             modelName = ANALYSIS_MODEL_NAME,
             generationConfig = generationConfig {
@@ -186,33 +196,90 @@ class GeminiVoiceRepository {
     suspend fun analyzeVoiceSample(
         audioBytes: ByteArray,
         mimeType: String,
-        preferredLanguage: StudioLanguage = AutoDetectLanguageOption
+        preferredLanguage: StudioLanguage = AutoDetectLanguageOption,
+        onStageUpdate: (String) -> Unit = {}
+    ): AcousticDnaAnalysis {
+        val languageInstruction = if (preferredLanguage.code == AutoDetectLanguageOption.code) {
+            "Auto-detect the exact spoken language and regional accent directly from the speaker's audio."
+        } else {
+            "Target language is ${preferredLanguage.name} (${preferredLanguage.nativeName}, code ${preferredLanguage.code}), " +
+                "and strictly preserve the speaker's authentic regional accent, vocal timbre, gender register, pitch contour, and speech rhythm from the audio."
+        }
+
+        val allowedVoicesCsv = VoiceCatalog.geminiVoiceNames.joinToString(", ")
+        val allowedLangCodesCsv = SupportedStudioLanguages.joinToString(", ") { it.code }
+        val analysisPrompt = buildString {
+            append("Profile this speaker's voice for high-fidelity voice cloning. ")
+            append(languageInstruction)
+            append(" Match gender, vocal weight, resonance, pitch range, regional accent, articulation, breath texture, and pacing. ")
+            append("For closestBaseVoice, pick ONE exact name from: [$allowedVoicesCsv]. ")
+            append("For detectedLanguageCode, pick ONE exact code from: [$allowedLangCodesCsv].")
+        }
+
+        val requestContent = content {
+            inlineData(audioBytes, mimeType)
+            text(analysisPrompt)
+        }
+
+        var responseText: String? = null
+        var firstPassFailure: Exception? = null
+
+        // Pass 1: Ultra-fast profiler (gemini-3.5-flash-lite)
+        onStageUpdate("Analyzing accent & vocal DNA…")
+        try {
+            val fastResponse = withTimeout(45_000L) {
+                fastVoiceProfilerModel.generateContent(requestContent)
+            }
+            responseText = fastResponse.text
+        } catch (e: TimeoutCancellationException) {
+            Log.w(TAG, "Fast voice profiler timed out; triggering fallback model", e)
+            firstPassFailure = e
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            if (isNonRetryableFirebaseError(e)) {
+                Log.e(TAG, "Non-retryable Firebase error during voice analysis", e)
+                throw IllegalStateException(formatFirebaseError(e, "Voice analysis failed."))
+            }
+            Log.w(TAG, "Fast voice profiler failed; triggering fallback model", e)
+            firstPassFailure = e
+        }
+
+        // Pass 2: Automatic fallback retry (gemini-3.8-flash)
+        if (responseText.isNullOrBlank()) {
+            onStageUpdate("Retrying with backup neural profiler…")
+            try {
+                val backupResponse = withTimeout(55_000L) {
+                    backupVoiceProfilerModel.generateContent(requestContent)
+                }
+                responseText = backupResponse.text
+            } catch (e: TimeoutCancellationException) {
+                Log.e(TAG, "Backup voice profiler also timed out", e)
+                throw IllegalStateException(
+                    "Voice profiling timed out on slow network. Please check your internet connection and tap Retry."
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Backup voice profiler failed", e)
+                val primaryErr = firstPassFailure
+                val message = formatFirebaseError(e, primaryErr?.localizedMessage ?: "Voice analysis failed.")
+                throw IllegalStateException(message)
+            }
+        }
+
+        val jsonText = responseText?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: throw IllegalStateException("Voice profiler returned an empty analysis.")
+
+        return parseAcousticDnaJson(jsonText, preferredLanguage)
+    }
+
+    private fun parseAcousticDnaJson(
+        jsonText: String,
+        preferredLanguage: StudioLanguage
     ): AcousticDnaAnalysis {
         try {
-            val languageInstruction = if (preferredLanguage.code == AutoDetectLanguageOption.code) {
-                "Auto-detect the exact spoken language AND regional accent directly from the speaker's audio."
-            } else {
-                "The user intends to use this cloned voice primarily in ${preferredLanguage.name} (${preferredLanguage.nativeName}), " +
-                    "AND you MUST still auto-detect and strictly preserve the speaker's authentic accent, vocal timbre, gender register, pitch contour, and speech rhythm from the audio sample."
-            }
-
-            val response = withTimeout(60_000L) {
-                voiceProfilerModel.generateContent(
-                    content {
-                        inlineData(audioBytes, mimeType)
-                        text(
-                            "Perform forensic acoustic voice-cloning profiling on this audio clip. " +
-                                "$languageInstruction " +
-                                "Carefully match speaker gender, vocal weight, resonance, pitch range, regional accent, vowel/consonant habits, " +
-                                "breath texture, and speaking cadence so synthesized speech reproduces this exact speaker faithfully. " +
-                                "Select the closest matching Gemini neural voice anchor from the enum."
-                        )
-                    }
-                )
-            }
-            val jsonText = response.text
-                ?: throw IllegalStateException("Voice profiler returned an empty analysis.")
-
             val json = JSONObject(jsonText)
             val rawTags = json.optJSONArray("tags")
             val tags = buildList {
@@ -224,15 +291,20 @@ class GeminiVoiceRepository {
                 }
             }.ifEmpty { listOf("Cloned", "Exact Accent", "Natural") }
 
-            val baseVoice = json.optString("closestBaseVoice", "Kore").let { candidate ->
-                if (candidate in VoiceCatalog.geminiVoiceNames) candidate else "Kore"
-            }
+            val rawBaseVoice = json.optString("closestBaseVoice", "Kore").trim()
+            val baseVoice = VoiceCatalog.geminiVoiceNames.firstOrNull {
+                it.equals(rawBaseVoice, ignoreCase = true)
+            } ?: "Kore"
 
-            val detectedLangCode = json.optString("detectedLanguageCode", "en-US").let { code ->
-                if (SupportedStudioLanguages.any { it.code == code }) code else "en-US"
-            }
-            val matchedLang = SupportedStudioLanguages.find { it.code == detectedLangCode }
-                ?: SupportedStudioLanguages.first()
+            val rawLangCode = json.optString("detectedLanguageCode", "").trim()
+            val rawLangName = json.optString("detectedLanguage", "").trim()
+            val matchedLang = SupportedStudioLanguages.firstOrNull {
+                it.code.equals(rawLangCode, ignoreCase = true)
+            } ?: SupportedStudioLanguages.firstOrNull {
+                rawLangCode.length >= 2 && it.code.startsWith(rawLangCode.take(2), ignoreCase = true)
+            } ?: SupportedStudioLanguages.firstOrNull {
+                rawLangName.isNotEmpty() && it.name.contains(rawLangName, ignoreCase = true)
+            } ?: SupportedStudioLanguages.first()
 
             val finalLanguage = if (preferredLanguage.code != AutoDetectLanguageOption.code) {
                 preferredLanguage
@@ -243,28 +315,30 @@ class GeminiVoiceRepository {
             return AcousticDnaAnalysis(
                 suggestedName = json.optString("suggestedName", "My Cloned Voice").ifBlank { "My Cloned Voice" },
                 closestBaseVoice = baseVoice,
-                detectedLanguage = json.optString("detectedLanguage", finalLanguage.name).ifBlank { finalLanguage.name },
+                detectedLanguage = rawLangName.ifBlank { finalLanguage.name },
                 detectedLanguageCode = finalLanguage.code,
                 detectedAccent = json.optString("detectedAccent", "Natural Native Accent").ifBlank { "Natural Native Accent" },
-                pitchDescriptor = json.optString("pitchDescriptor", "Balanced Studio Register"),
-                paceDescriptor = json.optString("paceDescriptor", "Natural Cadence"),
-                timbreSummary = json.optString("timbreSummary", "Authentic, expressive cloned speaker profile."),
+                pitchDescriptor = json.optString("pitchDescriptor", "Balanced Studio Register").ifBlank { "Balanced Studio Register" },
+                paceDescriptor = json.optString("paceDescriptor", "Natural Cadence").ifBlank { "Natural Cadence" },
+                timbreSummary = json.optString("timbreSummary", "Authentic, expressive cloned speaker profile.").ifBlank { "Authentic, expressive cloned speaker profile." },
                 acousticDnaPrompt = json.optString(
                     "acousticDnaPrompt",
                     "Faithfully mirror the speaker's exact natural accent, vocal weight, resonance, and rhythmic cadence."
-                ),
+                ).ifBlank {
+                    "Faithfully mirror the speaker's exact natural accent, vocal weight, resonance, and rhythmic cadence."
+                },
                 tags = tags.take(3),
                 defaultSpeed = json.optDouble("defaultSpeed", 1.0).toFloat().coerceIn(0.75f, 1.35f)
             )
-        } catch (e: TimeoutCancellationException) {
-            Log.e(TAG, "Voice cloning analysis timed out", e)
-            throw IllegalStateException("Voice analysis timed out after 60 seconds. Try a 10–30 second sample.")
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Exception) {
-            Log.e(TAG, "Voice cloning analysis failed", e)
-            throw IllegalStateException(formatFirebaseError(e, "Voice analysis failed."))
+            Log.e(TAG, "Failed to parse voice analysis JSON", e)
+            throw IllegalStateException("Could not read voice profile response. Please tap Retry.")
         }
+    }
+
+    private fun isNonRetryableFirebaseError(e: Exception): Boolean {
+        val msg = e.localizedMessage.orEmpty()
+        return msg.contains("Default FirebaseApp is not initialized", ignoreCase = true)
     }
 
     private fun buildTtsDirectorPrompt(

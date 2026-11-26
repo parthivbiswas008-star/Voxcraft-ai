@@ -281,7 +281,7 @@ sealed interface SynthesisUiState {
 
 sealed interface CloneAnalysisState {
     data object Idle : CloneAnalysisState
-    data object Analyzing : CloneAnalysisState
+    data class Analyzing(val stage: String = "Scanning audio & extracting clearest speech…") : CloneAnalysisState
     data class Ready(val analysis: AcousticDnaAnalysis) : CloneAnalysisState
     data class Error(val message: String) : CloneAnalysisState
 }

@@ -310,10 +310,10 @@ fun VoiceCloneLabScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = when {
-                                recordingState.isRecording -> "RECORDING LIVE PCM • 16kHz"
+                                recordingState.isRecording -> "RECORDING LIVE PCM • UNLIMITED"
                                 state.capturedSample != null -> state.sampleSourceLabel
-                                state.inputModeRecord -> "READY TO CAPTURE (10–30s RECOMMENDED)"
-                                else -> "SELECT WAV, MP3, M4A, OR OGG (<18MB)"
+                                state.inputModeRecord -> "READY TO CAPTURE • UNLIMITED DURATION"
+                                else -> "ANY AUDIO FILE (WAV, MP3, M4A, OGG • ANY LENGTH)"
                             },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -492,7 +492,8 @@ fun VoiceCloneLabScreen(
                             }
                         }
 
-                        val isAnalyzing = state.analysisState is CloneAnalysisState.Analyzing
+                        val analyzingState = state.analysisState as? CloneAnalysisState.Analyzing
+                        val isAnalyzing = analyzingState != null
                         Button(
                             onClick = onAnalyzeSample,
                             enabled = !isAnalyzing,
@@ -506,14 +507,19 @@ fun VoiceCloneLabScreen(
                                 contentColor = MaterialTheme.colorScheme.onSecondary
                             )
                         ) {
-                            if (isAnalyzing) {
+                            if (analyzingState != null) {
                                 CircularProgressIndicator(
                                     modifier = Modifier.size(18.dp),
                                     strokeWidth = 2.5.dp,
                                     color = MaterialTheme.colorScheme.onSecondary
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text("Detecting Accent & Acoustic DNA…", style = MaterialTheme.typography.labelLarge)
+                                Text(
+                                    text = analyzingState.stage,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.AutoAwesome,
@@ -524,6 +530,22 @@ fun VoiceCloneLabScreen(
                                 Text(
                                     text = stringResource(R.string.action_analyze_clone),
                                     style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
+
+                        AnimatedVisibility(visible = analyzingState != null) {
+                            Surface(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(10.dp),
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f),
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f))
+                            ) {
+                                Text(
+                                    text = "SMART SPEECH EXTRACTOR ACTIVE • AUTO-FALLBACK ENABLED",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
                                 )
                             }
                         }

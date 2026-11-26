@@ -27,10 +27,11 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.RandomAccessFile
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.text.SimpleDateFormat
@@ -43,7 +44,6 @@ import kotlin.math.sqrt
 
 private const val TAG = "LocalAudioEngine"
 private const val RECORD_SAMPLE_RATE = 16000
-private const val MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 
 data class SavedAudioClip(
     val file: File,
@@ -79,7 +79,7 @@ class LocalAudioEngine(
 
     private var audioRecord: AudioRecord? = null
     private var recordJob: Job? = null
-    private var recordedPcmStream: ByteArrayOutputStream? = null
+    private var recordedPcmFile: File? = null
     private var recordingStartMs: Long = 0L
 
     fun setPollingIntervalMs(intervalMs: Long) {
@@ -127,8 +127,8 @@ class LocalAudioEngine(
         }
 
         audioRecord = recorder
-        val pcmOut = ByteArrayOutputStream()
-        recordedPcmStream = pcmOut
+        val tempPcmFile = File(audioDir, "rec_raw_${UUID.randomUUID()}.pcm")
+        recordedPcmFile = tempPcmFile
         recordingStartMs = System.currentTimeMillis()
 
         _recordingState.value = LiveRecordingState(
@@ -140,43 +140,41 @@ class LocalAudioEngine(
 
         recordJob = scope.launch(Dispatchers.IO) {
             try {
-                recorder.startRecording()
-                val shortBuf = ShortArray(1024)
-                val byteBuf = ByteArray(shortBuf.size * 2)
-                var lastUiUpdate = 0L
+                BufferedOutputStream(FileOutputStream(tempPcmFile), 32 * 1024).use { pcmOut ->
+                    recorder.startRecording()
+                    val shortBuf = ShortArray(1024)
+                    val byteBuf = ByteArray(shortBuf.size * 2)
+                    var lastUiUpdate = 0L
 
-                while (isActive && _recordingState.value.isRecording) {
-                    val read = recorder.read(shortBuf, 0, shortBuf.size)
-                    if (read > 0) {
-                        var sumSquares = 0.0
-                        for (i in 0 until read) {
-                            val s = shortBuf[i]
-                            sumSquares += (s.toDouble() * s.toDouble())
-                            byteBuf[i * 2] = (s.toInt() and 0xFF).toByte()
-                            byteBuf[i * 2 + 1] = ((s.toInt() shr 8) and 0xFF).toByte()
-                        }
-                        synchronized(pcmOut) {
-                            pcmOut.write(byteBuf, 0, read * 2)
-                        }
-
-                        val now = System.currentTimeMillis()
-                        if (now - lastUiUpdate >= 45L) {
-                            lastUiUpdate = now
-                            val rms = sqrt(sumSquares / read) / 32768.0
-                            val normalized = (rms.toFloat() * 4.2f).coerceIn(0.06f, 1.0f)
-                            val elapsed = now - recordingStartMs
-                            _recordingState.update { prev ->
-                                prev.copy(
-                                    elapsedMs = elapsed,
-                                    currentLevel = normalized,
-                                    liveWaveform = (prev.liveWaveform.drop(1) + normalized)
-                                )
+                    while (isActive && _recordingState.value.isRecording) {
+                        val read = recorder.read(shortBuf, 0, shortBuf.size)
+                        if (read > 0) {
+                            var sumSquares = 0.0
+                            for (i in 0 until read) {
+                                val s = shortBuf[i]
+                                sumSquares += (s.toDouble() * s.toDouble())
+                                byteBuf[i * 2] = (s.toInt() and 0xFF).toByte()
+                                byteBuf[i * 2 + 1] = ((s.toInt() shr 8) and 0xFF).toByte()
                             }
-                            if (elapsed >= 60_000L) {
-                                break
+                            pcmOut.write(byteBuf, 0, read * 2)
+
+                            val now = System.currentTimeMillis()
+                            if (now - lastUiUpdate >= 45L) {
+                                lastUiUpdate = now
+                                val rms = sqrt(sumSquares / read) / 32768.0
+                                val normalized = (rms.toFloat() * 4.2f).coerceIn(0.06f, 1.0f)
+                                val elapsed = now - recordingStartMs
+                                _recordingState.update { prev ->
+                                    prev.copy(
+                                        elapsedMs = elapsed,
+                                        currentLevel = normalized,
+                                        liveWaveform = (prev.liveWaveform.drop(1) + normalized)
+                                    )
+                                }
                             }
                         }
                     }
+                    pcmOut.flush()
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error during microphone recording", e)
@@ -186,8 +184,13 @@ class LocalAudioEngine(
 
     suspend fun stopRecordingAndSave(): SavedAudioClip? = withContext(Dispatchers.IO) {
         _recordingState.update { it.copy(isRecording = false) }
-        recordJob?.cancel()
+        val activeRecordJob = recordJob
         recordJob = null
+        activeRecordJob?.cancel()
+        try {
+            activeRecordJob?.join()
+        } catch (_: Exception) {
+        }
 
         try {
             audioRecord?.stop()
@@ -201,26 +204,43 @@ class LocalAudioEngine(
         }
         audioRecord = null
 
-        val pcmBytes = recordedPcmStream?.let { stream ->
-            synchronized(stream) { stream.toByteArray() }
-        } ?: ByteArray(0)
-        recordedPcmStream = null
-
-        if (pcmBytes.size < 3200) {
+        val tempPcm = recordedPcmFile
+        recordedPcmFile = null
+        if (tempPcm == null || !tempPcm.exists()) {
             return@withContext null
         }
 
-        val wavBytes = encodePcmToWav(
-            pcmData = pcmBytes,
-            sampleRate = RECORD_SAMPLE_RATE,
-            channels = 1,
-            bitsPerSample = 16
-        )
-        val outFile = File(audioDir, "clone_sample_${UUID.randomUUID()}.wav")
-        FileOutputStream(outFile).use { it.write(wavBytes) }
+        val pcmSize = tempPcm.length()
+        if (pcmSize < 3200L) {
+            tempPcm.delete()
+            return@withContext null
+        }
 
-        val durationMs = ((pcmBytes.size.toLong() / 2L) * 1000L) / RECORD_SAMPLE_RATE
-        val peaks = extractPcm16WaveformPeaks(pcmBytes, barCount = 48)
+        val outFile = File(audioDir, "clone_sample_${UUID.randomUUID()}.wav")
+        try {
+            val header = buildWavHeader(
+                dataSize = pcmSize.coerceAtMost(Int.MAX_VALUE.toLong() - 44L).toInt(),
+                sampleRate = RECORD_SAMPLE_RATE,
+                channels = 1,
+                bitsPerSample = 16
+            )
+            FileOutputStream(outFile).use { out ->
+                out.write(header)
+                FileInputStream(tempPcm).use { input ->
+                    val buf = ByteArray(32 * 1024)
+                    while (true) {
+                        val read = input.read(buf)
+                        if (read <= 0) break
+                        out.write(buf, 0, read)
+                    }
+                }
+            }
+        } finally {
+            tempPcm.delete()
+        }
+
+        val durationMs = ((pcmSize / 2L) * 1000L) / RECORD_SAMPLE_RATE
+        val peaks = extractWavFileWaveformPeaks(outFile, barCount = 48)
         SavedAudioClip(
             file = outFile,
             mimeType = "audio/wav",
@@ -235,39 +255,36 @@ class LocalAudioEngine(
             val ext = when {
                 resolvedMime.contains("mpeg") || resolvedMime.contains("mp3") -> "mp3"
                 resolvedMime.contains("mp4") || resolvedMime.contains("m4a") || resolvedMime.contains("aac") -> "m4a"
-                resolvedMime.contains("ogg") -> "ogg"
+                resolvedMime.contains("ogg") || resolvedMime.contains("opus") -> "ogg"
+                resolvedMime.contains("flac") -> "flac"
                 else -> "wav"
-            }
-            val rawBytes = context.contentResolver.openInputStream(uri)?.use { input ->
-                val buffer = ByteArrayOutputStream()
-                val chunk = ByteArray(16 * 1024)
-                var total = 0
-                while (true) {
-                    val read = input.read(chunk)
-                    if (read <= 0) break
-                    total += read
-                    if (total > MAX_INLINE_AUDIO_BYTES) {
-                        return@withContext Result.failure(
-                            IllegalArgumentException("Audio sample exceeds 18 MB limit. Please select a clip under 60 seconds.")
-                        )
-                    }
-                    buffer.write(chunk, 0, read)
-                }
-                buffer.toByteArray()
-            } ?: return@withContext Result.failure(IllegalStateException("Could not read selected audio file."))
-
-            if (rawBytes.size < 512) {
-                return@withContext Result.failure(IllegalArgumentException("Selected audio file appears empty."))
             }
 
             val outFile = File(audioDir, "clone_import_${UUID.randomUUID()}.$ext")
-            FileOutputStream(outFile).use { it.write(rawBytes) }
+            val totalWritten = context.contentResolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(outFile).use { out ->
+                    val chunk = ByteArray(32 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val read = input.read(chunk)
+                        if (read <= 0) break
+                        out.write(chunk, 0, read)
+                        total += read
+                    }
+                    total
+                }
+            } ?: return@withContext Result.failure(IllegalStateException("Could not read selected audio file."))
+
+            if (totalWritten < 512L) {
+                outFile.delete()
+                return@withContext Result.failure(IllegalArgumentException("Selected audio file appears empty."))
+            }
 
             val durationMs = probeDurationMs(outFile)
-            val peaks = if (isWavBytes(rawBytes) && rawBytes.size > 44) {
-                extractPcm16WaveformPeaks(rawBytes.copyOfRange(44, rawBytes.size), barCount = 48)
+            val peaks = if (ext == "wav") {
+                extractWavFileWaveformPeaks(outFile, barCount = 48)
             } else {
-                extractGenericWaveformPeaks(rawBytes, barCount = 48)
+                extractGenericFileWaveformPeaks(outFile, barCount = 48)
             }
 
             Result.success(
@@ -639,18 +656,17 @@ class LocalAudioEngine(
         return out
     }
 
-    private fun encodePcmToWav(
-        pcmData: ByteArray,
+    private fun buildWavHeader(
+        dataSize: Int,
         sampleRate: Int,
         channels: Int,
         bitsPerSample: Int
     ): ByteArray {
         val byteRate = sampleRate * channels * bitsPerSample / 8
         val blockAlign = (channels * bitsPerSample / 8).toShort()
-        val dataSize = pcmData.size
         val chunkSize = 36 + dataSize
 
-        val header = ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
+        return ByteBuffer.allocate(44).order(ByteOrder.LITTLE_ENDIAN).apply {
             put("RIFF".toByteArray(Charsets.US_ASCII))
             putInt(chunkSize)
             put("WAVE".toByteArray(Charsets.US_ASCII))
@@ -665,8 +681,86 @@ class LocalAudioEngine(
             put("data".toByteArray(Charsets.US_ASCII))
             putInt(dataSize)
         }.array()
+    }
 
+    private fun encodePcmToWav(
+        pcmData: ByteArray,
+        sampleRate: Int,
+        channels: Int,
+        bitsPerSample: Int
+    ): ByteArray {
+        val header = buildWavHeader(
+            dataSize = pcmData.size,
+            sampleRate = sampleRate,
+            channels = channels,
+            bitsPerSample = bitsPerSample
+        )
         return header + pcmData
+    }
+
+    private fun extractWavFileWaveformPeaks(file: File, barCount: Int): List<Float> {
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                val totalLen = raf.length()
+                if (totalLen <= 44L) return List(barCount) { 0.2f }
+                val dataLen = totalLen - 44L
+                val stepBytes = (dataLen / barCount).coerceAtLeast(2L)
+                val sliceBuf = ByteArray(1024)
+                val rawPeaks = FloatArray(barCount)
+                var maxPeak = 0.001f
+
+                for (bar in 0 until barCount) {
+                    val pos = 44L + ((bar * stepBytes) and -2L)
+                    if (pos >= totalLen) break
+                    raf.seek(pos)
+                    val toRead = min(sliceBuf.size.toLong(), totalLen - pos).toInt() and -2
+                    if (toRead < 2) continue
+                    val read = raf.read(sliceBuf, 0, toRead) and -2
+                    var sumSq = 0.0
+                    val samples = read / 2
+                    for (i in 0 until samples) {
+                        val lo = sliceBuf[i * 2].toInt() and 0xFF
+                        val hi = sliceBuf[i * 2 + 1].toInt()
+                        val s = ((hi shl 8) or lo).toShort().toDouble() / 32768.0
+                        sumSq += s * s
+                    }
+                    val rms = if (samples > 0) sqrt(sumSq / samples).toFloat() else 0f
+                    rawPeaks[bar] = rms
+                    if (rms > maxPeak) maxPeak = rms
+                }
+                rawPeaks.map { (it / maxPeak).coerceIn(0.10f, 1.0f) }
+            }
+        } catch (_: Exception) {
+            List(barCount) { 0.28f }
+        }
+    }
+
+    private fun extractGenericFileWaveformPeaks(file: File, barCount: Int): List<Float> {
+        return try {
+            RandomAccessFile(file, "r").use { raf ->
+                val totalLen = raf.length()
+                if (totalLen < barCount) return List(barCount) { 0.25f }
+                val step = totalLen / barCount
+                val sliceBuf = ByteArray(512)
+                val values = FloatArray(barCount)
+                var maxVal = 1f
+                for (i in 0 until barCount) {
+                    raf.seek(i * step)
+                    val read = raf.read(sliceBuf, 0, min(sliceBuf.size.toLong(), totalLen - i * step).toInt())
+                    if (read <= 0) continue
+                    var acc = 0f
+                    for (b in 0 until read) {
+                        acc += abs(sliceBuf[b].toInt())
+                    }
+                    val avg = acc / read
+                    values[i] = avg
+                    if (avg > maxVal) maxVal = avg
+                }
+                values.map { (it / maxVal).coerceIn(0.14f, 0.98f) }
+            }
+        } catch (_: Exception) {
+            List(barCount) { 0.28f }
+        }
     }
 
     private fun extractPcm16WaveformPeaks(pcm: ByteArray, barCount: Int): List<Float> {
