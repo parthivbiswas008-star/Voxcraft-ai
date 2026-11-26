@@ -142,7 +142,7 @@ class GeminiVoiceRepository {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Speech synthesis failed", e)
-            throw IllegalStateException(e.localizedMessage ?: "Speech generation failed.")
+            throw IllegalStateException(formatFirebaseError(e, "Speech generation failed."))
         }
     }
 
@@ -179,7 +179,7 @@ class GeminiVoiceRepository {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Script humanization failed", e)
-            throw IllegalStateException(e.localizedMessage ?: "Failed to humanize script.")
+            throw IllegalStateException(formatFirebaseError(e, "Failed to humanize script."))
         }
     }
 
@@ -263,7 +263,7 @@ class GeminiVoiceRepository {
             throw e
         } catch (e: Exception) {
             Log.e(TAG, "Voice cloning analysis failed", e)
-            throw IllegalStateException(e.localizedMessage ?: "Voice analysis failed.")
+            throw IllegalStateException(formatFirebaseError(e, "Voice analysis failed."))
         }
     }
 
@@ -333,5 +333,13 @@ class GeminiVoiceRepository {
             appendLine()
             append(script.trim())
         }
+    }
+
+    private fun formatFirebaseError(e: Exception, fallback: String): String {
+        val raw = e.localizedMessage.orEmpty()
+        if (raw.contains("Default FirebaseApp is not initialized", ignoreCase = true)) {
+            return "Firebase is not initialized in this APK because app/google-services.json was missing during build. Add the GOOGLE_SERVICES_JSON secret in GitHub Actions and rebuild."
+        }
+        return raw.ifBlank { fallback }
     }
 }

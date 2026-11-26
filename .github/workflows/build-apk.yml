@@ -94,9 +94,47 @@ jobs:
           fi
           echo "Temporary debug keystore verified at ${KEYSTORE_PATH}."
 
+      - name: Prepare Firebase google-services.json
+        id: prepare_firebase_config
+        shell: bash
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          set -euo pipefail
+          CONFIG_PATH="app/google-services.json"
+
+          if [[ -f "$CONFIG_PATH" && -s "$CONFIG_PATH" ]] && ! grep -q "remixed-project-id" "$CONFIG_PATH"; then
+            echo "Found valid app/google-services.json in repository."
+            echo "created_from_secret=false" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${GOOGLE_SERVICES_JSON:-}" ]]; then
+            TRIMMED_START="$(printf '%s' "$GOOGLE_SERVICES_JSON" | tr -d '\r\n\t ' | cut -c1)"
+            if [[ "$TRIMMED_START" == "{" ]]; then
+              printf '%s' "$GOOGLE_SERVICES_JSON" > "$CONFIG_PATH"
+            else
+              printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > "$CONFIG_PATH"
+            fi
+
+            if ! python3 -c "import json; d=json.load(open('${CONFIG_PATH}')); assert 'project_info' in d and 'client' in d" 2>/dev/null; then
+              rm -f "$CONFIG_PATH"
+              echo "::error::GOOGLE_SERVICES_JSON secret is not valid Firebase google-services.json (raw JSON or base64-encoded JSON)."
+              exit 1
+            fi
+
+            echo "Restored app/google-services.json from GOOGLE_SERVICES_JSON repository secret."
+            echo "created_from_secret=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Missing app/google-services.json! Without it, the built APK fails with 'Default FirebaseApp is not initialized'. Add the contents of app/google-services.json as a GitHub Repository Secret named GOOGLE_SERVICES_JSON (Settings -> Secrets and variables -> Actions -> New repository secret) and re-run this workflow."
+            exit 1
+          fi
+
       - name: Build debug APK
         shell: bash
         run: gradle :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Clean up temporary Firebase config
+        if: ${{ always() && steps.prepare_firebase_config.outputs.created_from_secret == 'true' }}
+        shell: bash
+        run: rm -f app/google-services.json
 
       - name: Verify debug APK
         shell: bash
@@ -165,7 +203,7 @@ jobs:
           fi
 
           ASSET_DIR="$(mktemp -d "${RUNNER_TEMP}/release-asset-XXXXXX")"
-          ASSET_NAME="${SAFE_REPO_NAME}-debug-build-${GITHUB_RUN_NUMBER}.apk"
+          ASSET_NAME="voxcraft-ai-debug-build-${GITHUB_RUN_NUMBER}.apk"
           ASSET_PATH="${ASSET_DIR}/${ASSET_NAME}"
 
           cp -- "$SOURCE_APK" "$ASSET_PATH"
@@ -202,7 +240,7 @@ jobs:
           fi
 
           RELEASE_TAG="debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
-          RELEASE_TITLE="Debug APK Build #${GITHUB_RUN_NUMBER}"
+          RELEASE_TITLE="VoxCraft AI - Debug APK Build #${GITHUB_RUN_NUMBER}"
 
           echo "release_tag=${RELEASE_TAG}" >> "$GITHUB_OUTPUT"
           echo "release_title=${RELEASE_TITLE}" >> "$GITHUB_OUTPUT"
@@ -243,7 +281,7 @@ jobs:
           set -euo pipefail
 
           EFFECTIVE_TAG="${RELEASE_TAG:-debug-apk-build-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}}"
-          EFFECTIVE_TITLE="${RELEASE_TITLE:-Debug APK Build #${GITHUB_RUN_NUMBER}}"
+          EFFECTIVE_TITLE="${RELEASE_TITLE:-VoxCraft AI - Debug APK Build #${GITHUB_RUN_NUMBER}}"
           EFFECTIVE_ASSET="${ASSET_NAME:-}"
 
           PUBLISH_VERIFIED="false"
