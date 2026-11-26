@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">VoxCraft AI</string>
+    <string name="studio_badge_pro">PRO UNLIMITED</string>
+    <string name="nav_studio">Studio</string>
+    <string name="nav_voices">Voices</string>
+    <string name="nav_clone">Clone</string>
+    <string name="nav_history">History</string>
+    <string name="action_generate_speech">Generate Speech</string>
+    <string name="action_generating">Synthesizing…</string>
+    <string name="action_auto_humanize">Auto-Humanize</string>
+    <string name="action_humanizing">Humanizing…</string>
+    <string name="action_record_sample">Record Voice Sample</string>
+    <string name="action_stop_recording">Stop Recording</string>
+    <string name="action_import_audio">Import Audio File</string>
+    <string name="action_analyze_clone">Analyze &amp; Clone Voice</string>
+    <string name="action_save_clone">Save Cloned Voice</string>
+    <string name="action_share_wav">Share WAV Audio</string>
+    <string name="action_use_in_studio">Use in Studio</string>
+    <string name="action_remix_in_studio">Remix</string>
+    <string name="script_placeholder">Type or paste any script… Try inserting expressive cues like [laughter] or [pause 0.5s] for hyper-realistic human cadence.</string>
+    <string name="clone_teleprompter_prompt">“Good evening! I’m testing my custom voice clone inside VoxCraft Studio. Notice how my natural cadence shifts—sometimes calm and warm, sometimes curious, and even a little surprised [laughter]. Ready to bring every script to life.”</string>
+    <string name="empty_history_title">No Voice Renders Yet</string>
+    <string name="empty_history_subtitle">Generate your first speech clip in the Studio Playground—every WAV render is saved locally for instant replay and sharing.</string>
+    <string name="empty_clones_title">No Cloned Voices Yet</string>
+    <string name="empty_clones_subtitle">Record a 10-second mic sample or import any audio clip in the Clone Lab to craft unlimited custom voices.</string>
+    <string name="mic_permission_rationale">Microphone access lets you record a 10–30 second vocal sample for instant voice cloning. You can also import an existing audio file anytime.</string>
+    <string name="error_empty_script">Enter some text in the script editor before generating speech.</string>
+    <string name="cd_play_audio">Play audio</string>
+    <string name="cd_pause_audio">Pause audio</string>
+    <string name="cd_loop_audio">Toggle loop playback</string>
+    <string name="cd_share_audio">Share WAV audio</string>
+    <string name="cd_close_player">Close player</string>
+    <string name="cd_favorite_voice">Toggle favorite voice</string>
+    <string name="cd_preview_voice">Preview voice sample</string>
+    <string name="cd_delete_item">Delete item</string>
+    <string name="cd_studio_hero">VoxCraft acoustic waveform visual</string>
+</resources>
