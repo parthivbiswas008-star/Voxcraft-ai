@@ -34,6 +34,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material3.Button
@@ -58,6 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -68,9 +70,14 @@ import com.example.R
 import com.example.audio.LiveRecordingState
 import com.example.data.local.ClonedVoiceEntity
 import com.example.model.AcousticDnaAnalysis
+import com.example.model.AutoDetectLanguageOption
 import com.example.model.CloneAnalysisState
+import com.example.model.StudioLanguage
+import com.example.model.SupportedStudioLanguages
 import com.example.model.VoiceCatalog
+import com.example.ui.components.LanguagePickerDialog
 import com.example.ui.components.LiveOscilloscopeWaveform
+import com.example.ui.components.StudioGlassCard
 import com.example.viewmodel.CloneLabState
 import com.example.viewmodel.StudioViewModel
 
@@ -80,19 +87,24 @@ fun VoiceCloneLabScreen(
     recordingState: LiveRecordingState,
     savedClones: List<ClonedVoiceEntity>,
     onSelectInputMode: (Boolean) -> Unit,
+    onSelectTargetLanguage: (StudioLanguage) -> Unit,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onImportAudioUri: (Uri) -> Unit,
     onPlayCapturedSample: () -> Unit,
     onClearSample: () -> Unit,
     onAnalyzeSample: () -> Unit,
-    onUpdateCloneFields: (String?, String?, String?, String?) -> Unit,
+    onUpdateCloneFields: (String?, String?, String?, StudioLanguage?, String?) -> Unit,
+    onTestAnalyzedClone: () -> Unit,
     onSaveClone: () -> Unit,
     onUseSavedClone: (ClonedVoiceEntity) -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     var micDeniedMessage by remember { mutableStateOf(false) }
+    var showTargetLangDialog by remember { mutableStateOf(false) }
+    var showBlueprintLangDialog by remember { mutableStateOf(false) }
 
     val micPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -133,31 +145,95 @@ fun VoiceCloneLabScreen(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "10–60s vocal sample • Unlimited custom voice slots",
+                    text = "Auto-detects accent & timbre • Set any target language",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            Surface(
-                shape = RoundedCornerShape(99.dp),
-                color = MaterialTheme.colorScheme.secondaryContainer,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    text = "∞ UNLOCKED",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                Surface(
+                    shape = RoundedCornerShape(99.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f))
+                ) {
+                    Text(
+                        text = "∞ FREE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Studio settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+        }
+
+        // Target Language Selector (with country flags + Auto-Detect Accent/Language)
+        StudioGlassCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .clickable { showTargetLangDialog = true }
+                .testTag("clone_language_selector"),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = state.targetLanguage.flag,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "CLONE LANGUAGE & ACCENT LOCK",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            text = state.targetLanguage.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Accent is auto-detected from your audio sample",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = Icons.Default.ExpandMore,
+                    contentDescription = "Choose clone language",
+                    tint = MaterialTheme.colorScheme.primary
                 )
             }
         }
 
         // Mode switcher: Record Live vs Import Audio
-        Surface(
+        StudioGlassCard(
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            shape = RoundedCornerShape(14.dp)
         ) {
             Row(
                 modifier = Modifier
@@ -202,18 +278,10 @@ fun VoiceCloneLabScreen(
         }
 
         // Capture / Import Console Card
-        Surface(
+        StudioGlassCard(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            border = BorderStroke(
-                1.dp,
-                if (recordingState.isRecording) {
-                    MaterialTheme.colorScheme.tertiary
-                } else {
-                    MaterialTheme.colorScheme.outlineVariant
-                }
-            )
+            accentBorder = if (recordingState.isRecording) MaterialTheme.colorScheme.tertiary else null
         ) {
             Column(
                 modifier = Modifier
@@ -261,7 +329,6 @@ fun VoiceCloneLabScreen(
                     }
                 }
 
-                // Live Oscilloscope / Captured Waveform
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(14.dp),
@@ -281,7 +348,14 @@ fun VoiceCloneLabScreen(
                 }
 
                 if (state.inputModeRecord) {
-                    // Guided Studio Teleprompter Script
+                    val calibrationPrompt = when {
+                        state.targetLanguage.code.startsWith("bn") ->
+                            "“নমস্কার! আমি VoxCraft Studio-তে আমার নিজের ভয়েস ক্লোন টেস্ট করছি। খেয়াল করুন আমার স্বাভাবিক কথা বলার ভঙ্গি, অ্যাকসেন্ট আর আবেগ—সবকিছু একদম আসল শোনাবে।”"
+                        state.targetLanguage.code.startsWith("hi") ->
+                            "“नमस्ते! मैं VoxCraft Studio में अपनी आवाज़ क्लोन कर रहा हूँ। मेरी प्राकृतिक लय, लहजे और अंदाज़ को ध्यान से सुनिए—हर शब्द बिल्कुल असली लगेगा।”"
+                        else -> stringResource(R.string.clone_teleprompter_prompt)
+                    }
+
                     Surface(
                         modifier = Modifier.fillMaxWidth(),
                         shape = RoundedCornerShape(14.dp),
@@ -293,12 +367,12 @@ fun VoiceCloneLabScreen(
                             verticalArrangement = Arrangement.spacedBy(4.dp)
                         ) {
                             Text(
-                                text = "GUIDED VOICE CALIBRATION SCRIPT",
+                                text = "GUIDED VOICE CALIBRATION SCRIPT (${state.targetLanguage.flag})",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary
                             )
                             Text(
-                                text = stringResource(R.string.clone_teleprompter_prompt),
+                                text = calibrationPrompt,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurface
                             )
@@ -378,7 +452,6 @@ fun VoiceCloneLabScreen(
                     }
                 }
 
-                // Captured sample action row
                 AnimatedVisibility(visible = state.capturedSample != null && !recordingState.isRecording) {
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
@@ -402,7 +475,7 @@ fun VoiceCloneLabScreen(
                                     tint = MaterialTheme.colorScheme.primary
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
-                                Text("Listen", color = MaterialTheme.colorScheme.onSurface)
+                                Text("Listen Sample", color = MaterialTheme.colorScheme.onSurface)
                             }
 
                             IconButton(
@@ -440,7 +513,7 @@ fun VoiceCloneLabScreen(
                                     color = MaterialTheme.colorScheme.onSecondary
                                 )
                                 Spacer(modifier = Modifier.width(10.dp))
-                                Text("Extracting Acoustic DNA…", style = MaterialTheme.typography.labelLarge)
+                                Text("Detecting Accent & Acoustic DNA…", style = MaterialTheme.typography.labelLarge)
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.AutoAwesome,
@@ -468,8 +541,12 @@ fun VoiceCloneLabScreen(
                     name = state.editableCloneName,
                     accent = state.editableAccent,
                     baseVoice = state.editableBaseVoice,
+                    selectedLanguage = state.editableLanguage,
                     tagsText = state.editableTagsText,
+                    isTestingClone = state.isTestingClone,
                     onUpdateFields = onUpdateCloneFields,
+                    onPickLanguage = { showBlueprintLangDialog = true },
+                    onTestClone = onTestAnalyzedClone,
                     onSave = onSaveClone
                 )
             }
@@ -486,15 +563,14 @@ fun VoiceCloneLabScreen(
 
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 savedClones.forEach { clone ->
-                    Surface(
+                    StudioGlassCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(14.dp))
                             .clickable { onUseSavedClone(clone) }
                             .testTag("saved_clone_quick_${clone.id}"),
                         shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f))
+                        accentBorder = MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f)
                     ) {
                         Row(
                             modifier = Modifier
@@ -511,14 +587,14 @@ fun VoiceCloneLabScreen(
                             Spacer(modifier = Modifier.width(12.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = clone.name,
+                                    text = "${clone.countryFlag} ${clone.name}",
                                     style = MaterialTheme.typography.titleMedium,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
                                 Text(
-                                    text = "${clone.pitchDescriptor} • ${clone.accent} • Anchor: ${clone.baseGeminiVoice}",
+                                    text = "${clone.languageName} • ${clone.accent} • ${clone.pitchDescriptor}",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
@@ -538,12 +614,32 @@ fun VoiceCloneLabScreen(
 
         Spacer(modifier = Modifier.height(18.dp))
     }
+
+    if (showTargetLangDialog) {
+        LanguagePickerDialog(
+            title = "Clone Target Language",
+            languages = listOf(AutoDetectLanguageOption) + SupportedStudioLanguages,
+            selectedCode = state.targetLanguage.code,
+            onSelect = onSelectTargetLanguage,
+            onDismiss = { showTargetLangDialog = false }
+        )
+    }
+
+    if (showBlueprintLangDialog) {
+        LanguagePickerDialog(
+            title = "Voice Language",
+            languages = SupportedStudioLanguages,
+            selectedCode = state.editableLanguage.code,
+            onSelect = { lang -> onUpdateCloneFields(null, null, null, lang, null) },
+            onDismiss = { showBlueprintLangDialog = false }
+        )
+    }
 }
 
 @Composable
 private fun ModeSegmentButton(
     label: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     selected: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -584,19 +680,22 @@ private fun AcousticDnaBlueprintCard(
     name: String,
     accent: String,
     baseVoice: String,
+    selectedLanguage: StudioLanguage,
     tagsText: String,
-    onUpdateFields: (String?, String?, String?, String?) -> Unit,
+    isTestingClone: Boolean,
+    onUpdateFields: (String?, String?, String?, StudioLanguage?, String?) -> Unit,
+    onPickLanguage: () -> Unit,
+    onTestClone: () -> Unit,
     onSave: () -> Unit
 ) {
     var baseVoiceDropdownOpen by remember { mutableStateOf(false) }
 
-    Surface(
+    StudioGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("acoustic_dna_blueprint_card"),
         shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.7f))
+        accentBorder = MaterialTheme.colorScheme.secondary
     ) {
         Column(
             modifier = Modifier
@@ -610,7 +709,7 @@ private fun AcousticDnaBlueprintCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "ACOUSTIC DNA EXTRACTED",
+                    text = "ACCENT & ACOUSTIC DNA LOCKED",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.secondary
                 )
@@ -631,13 +730,21 @@ private fun AcousticDnaBlueprintCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                DnaTraitPill(label = "AUTO-DETECTED ACCENT", value = analysis.detectedAccent, modifier = Modifier.weight(1f))
+                DnaTraitPill(label = "DETECTED TONGUE", value = analysis.detectedLanguage, modifier = Modifier.weight(1f))
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 DnaTraitPill(label = "REGISTER", value = analysis.pitchDescriptor, modifier = Modifier.weight(1f))
                 DnaTraitPill(label = "PACE", value = analysis.paceDescriptor, modifier = Modifier.weight(1f))
             }
 
             OutlinedTextField(
                 value = name,
-                onValueChange = { onUpdateFields(it, null, null, null) },
+                onValueChange = { onUpdateFields(it, null, null, null, null) },
                 label = { Text("Clone Name") },
                 singleLine = true,
                 modifier = Modifier
@@ -650,14 +757,55 @@ private fun AcousticDnaBlueprintCard(
                 )
             )
 
+            // Clone language selector with flag
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onPickLanguage),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(selectedLanguage.flag, style = MaterialTheme.typography.titleMedium)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "OUTPUT LANGUAGE",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = selectedLanguage.name,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.ExpandMore,
+                        contentDescription = "Change clone language",
+                        tint = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 OutlinedTextField(
                     value = accent,
-                    onValueChange = { onUpdateFields(null, it, null, null) },
-                    label = { Text("Accent") },
+                    onValueChange = { onUpdateFields(null, it, null, null, null) },
+                    label = { Text("Accent Lock") },
                     singleLine = true,
                     modifier = Modifier.weight(1f),
                     shape = RoundedCornerShape(12.dp),
@@ -699,7 +847,7 @@ private fun AcousticDnaBlueprintCard(
                             DropdownMenuItem(
                                 text = { Text(vName) },
                                 onClick = {
-                                    onUpdateFields(null, null, vName, null)
+                                    onUpdateFields(null, null, vName, null, null)
                                     baseVoiceDropdownOpen = false
                                 }
                             )
@@ -710,7 +858,7 @@ private fun AcousticDnaBlueprintCard(
 
             OutlinedTextField(
                 value = tagsText,
-                onValueChange = { onUpdateFields(null, null, null, it) },
+                onValueChange = { onUpdateFields(null, null, null, null, it) },
                 label = { Text("Style Tags (comma-separated)") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
@@ -721,29 +869,63 @@ private fun AcousticDnaBlueprintCard(
                 )
             )
 
-            Button(
-                onClick = onSave,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(52.dp)
-                    .testTag("clone_save_button"),
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
-                ),
-                contentPadding = PaddingValues(horizontal = 16.dp)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Check,
-                    contentDescription = "Save cloned voice",
-                    modifier = Modifier.size(20.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = stringResource(R.string.action_save_clone),
-                    style = MaterialTheme.typography.labelLarge
-                )
+                OutlinedButton(
+                    onClick = onTestClone,
+                    enabled = !isTestingClone,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(50.dp)
+                        .testTag("clone_test_preview_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary)
+                ) {
+                    if (isTestingClone) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.secondary
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text("Testing…", style = MaterialTheme.typography.labelMedium)
+                    } else {
+                        Icon(
+                            imageVector = Icons.Default.PlayArrow,
+                            contentDescription = "Test cloned voice",
+                            tint = MaterialTheme.colorScheme.secondary
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("Test Clone", color = MaterialTheme.colorScheme.onSurface)
+                    }
+                }
+
+                Button(
+                    onClick = onSave,
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .height(50.dp)
+                        .testTag("clone_save_button"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 14.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Save cloned voice",
+                        modifier = Modifier.size(19.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = stringResource(R.string.action_save_clone),
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
             }
         }
     }

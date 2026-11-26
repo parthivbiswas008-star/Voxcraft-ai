@@ -22,16 +22,76 @@ enum class VoiceCategory(val label: String) {
     CALM("Calm")
 }
 
+data class StudioLanguage(
+    val code: String,
+    val name: String,
+    val nativeName: String,
+    val flag: String
+) {
+    val displayWithFlag: String get() = "$flag  $name"
+    val fullLabel: String get() = "$flag  $name ($nativeName)"
+}
+
+val SupportedStudioLanguages: List<StudioLanguage> = listOf(
+    StudioLanguage("en-US", "English (US)", "English", "🇺🇸"),
+    StudioLanguage("en-GB", "English (UK)", "British English", "🇬🇧"),
+    StudioLanguage("en-IN", "English (India)", "Indian English", "🇮🇳"),
+    StudioLanguage("hi-IN", "Hindi", "हिन्दी", "🇮🇳"),
+    StudioLanguage("bn-IN", "Bengali (India)", "বাংলা — ভারত", "🇮🇳"),
+    StudioLanguage("bn-BD", "Bengali (Bangladesh)", "বাংলা — বাংলাদেশ", "🇧🇩"),
+    StudioLanguage("ta-IN", "Tamil", "தமிழ்", "🇮🇳"),
+    StudioLanguage("te-IN", "Telugu", "తెలుగు", "🇮🇳"),
+    StudioLanguage("mr-IN", "Marathi", "मराठी", "🇮🇳"),
+    StudioLanguage("gu-IN", "Gujarati", "ગુજરાતી", "🇮🇳"),
+    StudioLanguage("ur-PK", "Urdu", "اردو", "🇵🇰"),
+    StudioLanguage("es-ES", "Spanish", "Español", "🇪🇸"),
+    StudioLanguage("es-MX", "Spanish (Mexico)", "Español MX", "🇲🇽"),
+    StudioLanguage("fr-FR", "French", "Français", "🇫🇷"),
+    StudioLanguage("de-DE", "German", "Deutsch", "🇩🇪"),
+    StudioLanguage("ja-JP", "Japanese", "日本語", "🇯🇵"),
+    StudioLanguage("ko-KR", "Korean", "한국어", "🇰🇷"),
+    StudioLanguage("zh-CN", "Mandarin Chinese", "中文", "🇨🇳"),
+    StudioLanguage("ar-SA", "Arabic", "العربية", "🇸🇦"),
+    StudioLanguage("pt-BR", "Portuguese (Brazil)", "Português", "🇧🇷"),
+    StudioLanguage("it-IT", "Italian", "Italiano", "🇮🇹"),
+    StudioLanguage("ru-RU", "Russian", "Русский", "🇷🇺"),
+    StudioLanguage("tr-TR", "Turkish", "Türkçe", "🇹🇷"),
+    StudioLanguage("id-ID", "Indonesian", "Bahasa Indonesia", "🇮🇩"),
+    StudioLanguage("vi-VN", "Vietnamese", "Tiếng Việt", "🇻🇳"),
+    StudioLanguage("th-TH", "Thai", "ไทย", "🇹🇭")
+)
+
+val AutoDetectLanguageOption = StudioLanguage(
+    code = "auto",
+    name = "Auto-Detect from Voice",
+    nativeName = "Match sample accent & tongue",
+    flag = "🌐"
+)
+
+fun findLanguageByNameOrCode(query: String): StudioLanguage {
+    val clean = query.trim().lowercase()
+    return SupportedStudioLanguages.find {
+        it.code.lowercase() == clean ||
+            it.name.lowercase() == clean ||
+            it.displayWithFlag.lowercase() == clean ||
+            clean.contains(it.name.lowercase())
+    } ?: SupportedStudioLanguages.first()
+}
+
 data class VoicePreset(
     val id: String,
     val displayName: String,
     val geminiVoiceName: String,
     val category: VoiceCategory,
+    val languageCode: String,
+    val languageName: String,
+    val countryFlag: String,
     val accent: String,
     val tone: String,
     val description: String,
     val tags: List<String>,
-    val previewSampleText: String
+    val previewSampleText: String,
+    val characterDirective: String = ""
 ) {
     val waveformSignature: List<Float> by lazy {
         val seed = id.hashCode()
@@ -49,6 +109,9 @@ data class StudioVoice(
     val geminiVoiceName: String,
     val isCloned: Boolean,
     val categoryLabel: String,
+    val languageCode: String = "en-US",
+    val languageName: String = "English (US)",
+    val countryFlag: String = "🇺🇸",
     val accent: String,
     val description: String,
     val tags: List<String>,
@@ -142,7 +205,9 @@ data class HumanizationConfig(
     val sadness: Float = EmotionPreset.CONVERSATIONAL.sadness,
     val intensity: Float = EmotionPreset.CONVERSATIONAL.intensity,
     val naturalBreathsEnabled: Boolean = true,
-    val language: String = "English (US)"
+    val languageCode: String = "en-US",
+    val language: String = "English (US)",
+    val countryFlag: String = "🇺🇸"
 )
 
 data class InlineCue(
@@ -151,34 +216,38 @@ data class InlineCue(
 )
 
 val StudioInlineCues = listOf(
+    InlineCue("[happy]", "Happy"),
+    InlineCue("[sad]", "Sad"),
+    InlineCue("[angry]", "Angry"),
+    InlineCue("[excited]", "Excited"),
+    InlineCue("[whisper]", "Whisper"),
     InlineCue("[laughter]", "Laughter"),
     InlineCue("[sigh]", "Sigh"),
+    InlineCue("[crying]", "Crying"),
+    InlineCue("[romantic]", "Romantic"),
+    InlineCue("[sarcastic]", "Sarcastic"),
+    InlineCue("[scared]", "Scared"),
+    InlineCue("[confident]", "Confident"),
     InlineCue("[pause 0.5s]", "Pause 0.5s"),
-    InlineCue("[whisper]", "Whisper"),
-    InlineCue("[excited]", "Excited"),
     InlineCue("[warmly]", "Warmly"),
     InlineCue("[slowly]", "Slowly")
 )
 
-val SupportedStudioLanguages = listOf(
-    "English (US)",
-    "English (UK)",
-    "English (India)",
-    "Spanish",
-    "French",
-    "German",
-    "Hindi",
-    "Japanese",
-    "Korean",
-    "Portuguese",
-    "Italian",
-    "Arabic"
-)
+private val BracketEmotionRegex = Regex("\\[([^\\[\\]]{1,40})\\]")
+
+fun extractBracketedEmotions(script: String): List<String> =
+    BracketEmotionRegex.findAll(script)
+        .map { it.groupValues[1].trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+        .toList()
 
 data class AcousticDnaAnalysis(
     val suggestedName: String,
     val closestBaseVoice: String,
-    val accent: String,
+    val detectedLanguage: String,
+    val detectedLanguageCode: String,
+    val detectedAccent: String,
     val pitchDescriptor: String,
     val paceDescriptor: String,
     val timbreSummary: String,
@@ -227,335 +296,486 @@ object VoiceCatalog {
     )
 
     val presets: List<VoicePreset> = listOf(
+        // --- Flagship English ---
         VoicePreset(
             id = "preset_kore",
             displayName = "Kore — Sonic Anchor",
             geminiVoiceName = "Kore",
             category = VoiceCategory.ASSISTANT,
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
             accent = "US Studio",
             tone = "Firm & Crisp",
             description = "Ultra-clear flagship studio voice tuned for real-time AI assistants and crisp narration.",
             tags = listOf("Flagship", "Crisp", "Natural"),
-            previewSampleText = "Welcome to VoxCraft Studio. Every breath, pause, and inflection is tuned for lifelike realism."
+            previewSampleText = "Welcome to VoxCraft Studio. [warmly] Every breath, pause, and emotion shifts naturally in real time."
         ),
         VoicePreset(
             id = "preset_puck",
             displayName = "Puck — Upbeat Creator",
             geminiVoiceName = "Puck",
             category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
             accent = "US Casual",
             tone = "Lively & Warm",
-            description = "Expressive, upbeat conversational speaker ideal for social videos, podcasts, and banter.",
+            description = "Expressive, upbeat conversational speaker ideal for reels, podcasts, and banter.",
             tags = listOf("Upbeat", "Expressive", "Podcast"),
-            previewSampleText = "Hey there! Ready to turn plain text into speech that sounds genuinely human? Let's dive in."
+            previewSampleText = "[excited] Hey there! Drop any emotion inside brackets and hear it come alive immediately!"
         ),
         VoicePreset(
-            id = "preset_aoede",
-            displayName = "Aoede — Velvet Storyteller",
+            id = "preset_aoede_uk",
+            displayName = "Aoede — London Storyteller",
             geminiVoiceName = "Aoede",
             category = VoiceCategory.STORYTELLING,
-            accent = "Mid-Atlantic",
-            tone = "Breezy & Melodic",
-            description = "Warm, nuanced narrator with effortless rhythmic flow for audiobooks and brand films.",
-            tags = listOf("Audiobook", "Warm", "Melodic"),
-            previewSampleText = "Under the neon glow of the midnight studio, the first soundwave began to breathe."
+            languageCode = "en-GB",
+            languageName = "English (UK)",
+            countryFlag = "🇬🇧",
+            accent = "British RP",
+            tone = "Velvet & Melodic",
+            description = "Warm British narrator with effortless rhythmic flow for audiobooks and cinema films.",
+            tags = listOf("British", "Audiobook", "Melodic"),
+            previewSampleText = "Under the midnight glass dome of London, the first acoustic wave began to glow.",
+            characterDirective = "Speak with a refined, warm British London accent."
         ),
         VoicePreset(
             id = "preset_fenrir",
             displayName = "Fenrir — Cinema Baritone",
             geminiVoiceName = "Fenrir",
             category = VoiceCategory.CHARACTER,
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
             accent = "US Deep",
-            tone = "Bold & Excitable",
-            description = "Commanding, dynamic vocal presence built for trailers, gaming characters, and bold hooks.",
+            tone = "Bold & Dramatic",
+            description = "Commanding vocal presence built for trailers, gaming characters, and bold hooks.",
             tags = listOf("Trailer", "Bold", "Dynamic"),
-            previewSampleText = "Some voices merely read words. Others command the room from the very first syllable."
+            previewSampleText = "Some voices merely read words. [dramatic] Others command the room from the very first breath."
         ),
         VoicePreset(
             id = "preset_charon",
             displayName = "Charon — Broadcast Pro",
             geminiVoiceName = "Charon",
             category = VoiceCategory.BROADCAST,
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
             accent = "US Broadcast",
-            tone = "Informative & Grounded",
+            tone = "Grounded & Clear",
             description = "Authoritative documentary and newsroom voice with composed, trustworthy pacing.",
             tags = listOf("Documentary", "News", "Grounded"),
-            previewSampleText = "Real-time neural audio synthesis is reshaping how creators produce studio-grade voiceovers."
+            previewSampleText = "Real-time neural speech synthesis is transforming how creators produce broadcast audio."
         ),
         VoicePreset(
-            id = "preset_zephyr",
-            displayName = "Zephyr — Bright Concierge",
+            id = "preset_zephyr_in",
+            displayName = "Rohan — Indian English Host",
             geminiVoiceName = "Zephyr",
             category = VoiceCategory.ASSISTANT,
-            accent = "US Bright",
-            tone = "Bright & Friendly",
-            description = "Polished, welcoming voice assistant designed for low-latency customer conversations.",
-            tags = listOf("Concierge", "Friendly", "Clean"),
-            previewSampleText = "Hi! I've got your schedule lined up and ready whenever you want to review the details."
+            languageCode = "en-IN",
+            languageName = "English (India)",
+            countryFlag = "🇮🇳",
+            accent = "Indian English",
+            tone = "Bright & Smart",
+            description = "Polished modern Indian English voice tailored for tech explainers and AI agents.",
+            tags = listOf("Indian English", "Tech", "Friendly"),
+            previewSampleText = "Hi! Welcome to VoxCraft AI—ultra-smooth voice generation with complete creative control.",
+            characterDirective = "Speak in natural, modern urban Indian English accent."
+        ),
+
+        // --- Bengali (বাংলা) Dedicated Characters ---
+        VoicePreset(
+            id = "preset_bn_ananya",
+            displayName = "Ananya — Kolkata Storyteller",
+            geminiVoiceName = "Sulafat",
+            category = VoiceCategory.STORYTELLING,
+            languageCode = "bn-IN",
+            languageName = "Bengali (India)",
+            countryFlag = "🇮🇳",
+            accent = "Kolkata Bengali",
+            tone = "Warm & Poetic",
+            description = "Expressive Kolkata Bengali voice with natural musicality for stories, poetry, and narration.",
+            tags = listOf("বাংলা", "Kolkata", "Storyteller"),
+            previewSampleText = "নমস্কার! ভক্সক্রাফট স্টুডিওতে আপনাকে স্বাগতম। [warmly] আজকের গল্পটা একদম হৃদয় ছুঁয়ে যাবে।",
+            characterDirective = "Speak fluently in natural Kolkata Bengali (বাংলা) with warm melodic intonation."
+        ),
+        VoicePreset(
+            id = "preset_bn_aritro",
+            displayName = "Aritro — Bengali Podcast Host",
+            geminiVoiceName = "Orus",
+            category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "bn-IN",
+            languageName = "Bengali (India)",
+            countryFlag = "🇮🇳",
+            accent = "Modern Bengali",
+            tone = "Crisp & Friendly",
+            description = "Natural, lively Bengali conversational voice built for YouTube, podcasts, and daily assistants.",
+            tags = listOf("বাংলা", "Podcast", "Conversational"),
+            previewSampleText = "[happy] দারুণ ব্যাপার! এখন বাংলায় যেকোনো ইমোশন দিয়ে একদম মানুষের মতো ভয়েস বানানো যাবে।",
+            characterDirective = "Speak naturally in lively conversational Kolkata Bengali (বাংলা)."
+        ),
+        VoicePreset(
+            id = "preset_bn_tanvir",
+            displayName = "Tanvir — Dhaka Anchor",
+            geminiVoiceName = "Charon",
+            category = VoiceCategory.BROADCAST,
+            languageCode = "bn-BD",
+            languageName = "Bengali (Bangladesh)",
+            countryFlag = "🇧🇩",
+            accent = "Dhaka Bengali",
+            tone = "Resonant & Clear",
+            description = "Confident Dhaka Bengali presenter voice crafted for news, documentaries, and reels.",
+            tags = listOf("বাংলা", "Dhaka", "Broadcast"),
+            previewSampleText = "আসসালামু আলাইকুম! ভক্সক্রাফট এআই-এর রিয়েল-টাইম বাংলা ভয়েস স্টুডিওতে স্বাগতম।",
+            characterDirective = "Speak fluently in standard Dhaka Bangladeshi Bengali (বাংলা) with broadcast clarity."
+        ),
+        VoicePreset(
+            id = "preset_bn_nabila",
+            displayName = "Nabila — Soft Bengali Calm",
+            geminiVoiceName = "Vindemiatrix",
+            category = VoiceCategory.CALM,
+            languageCode = "bn-BD",
+            languageName = "Bengali (Bangladesh)",
+            countryFlag = "🇧🇩",
+            accent = "Soft Dhaka Bengali",
+            tone = "Gentle & Intimate",
+            description = "Soothing, soft-spoken Bengali voice ideal for calm guidance, bedtime tales, and recitations.",
+            tags = listOf("বাংলা", "Calm", "Recitation"),
+            previewSampleText = "[whisper] শান্ত হয়ে চোখ বন্ধ করুন, আর শুনুন নিঃশব্দ রাতের সুর।",
+            characterDirective = "Speak softly in gentle, soothing Bangladeshi Bengali (বাংলা)."
+        ),
+
+        // --- Hindi (हिन्दी) Dedicated Characters ---
+        VoicePreset(
+            id = "preset_hi_meera",
+            displayName = "Meera — Mumbai Conversational",
+            geminiVoiceName = "Leda",
+            category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "hi-IN",
+            languageName = "Hindi",
+            countryFlag = "🇮🇳",
+            accent = "Modern Hindi",
+            tone = "Warm & Agile",
+            description = "Natural, contemporary Hindi voice with effortless everyday warmth for creators and assistants.",
+            tags = listOf("हिन्दी", "Conversational", "Warm"),
+            previewSampleText = "नमस्ते! [happy] VoxCraft स्टूडियो में आपका स्वागत है—अब हर जज़्बात बिल्कुल असली लगेगा।",
+            characterDirective = "Speak naturally in authentic contemporary Mumbai/Delhi Hindi (हिन्दी)."
+        ),
+        VoicePreset(
+            id = "preset_hi_kabir",
+            displayName = "Kabir — Hindi Cinema Baritone",
+            geminiVoiceName = "Fenrir",
+            category = VoiceCategory.CHARACTER,
+            languageCode = "hi-IN",
+            languageName = "Hindi",
+            countryFlag = "🇮🇳",
+            accent = "Deep North Indian",
+            tone = "Rich & Cinematic",
+            description = "Deep, magnetic Hindi narrator crafted for dramatic stories, promos, and trailers.",
+            tags = listOf("हिन्दी", "Cinema", "Baritone"),
+            previewSampleText = "[dramatic] कुछ कहानियाँ सिर्फ़ सुनी नहीं जातीं... उन्हें महसूस किया जाता है।",
+            characterDirective = "Speak in deep, cinematic, resonant Hindi (हिन्दी) with dramatic storytelling weight."
+        ),
+        VoicePreset(
+            id = "preset_hi_aarav",
+            displayName = "Aarav — Hindi News & Tech",
+            geminiVoiceName = "Rasalgethi",
+            category = VoiceCategory.BROADCAST,
+            languageCode = "hi-IN",
+            languageName = "Hindi",
+            countryFlag = "🇮🇳",
+            accent = "Shuddh Hindi Studio",
+            tone = "Sharp & Informative",
+            description = "Articulate Hindi broadcast and tech-review voice with crisp diction.",
+            tags = listOf("हिन्दी", "Tech", "Broadcast"),
+            previewSampleText = "आज हम देखेंगे कि रीयल-टाइम वॉइस एआई किस तरह कंटेंट क्रिएशन बदल रहा है।",
+            characterDirective = "Speak clearly in articulate broadcast Hindi (हिन्दी)."
+        ),
+
+        // --- More South Asian Languages ---
+        VoicePreset(
+            id = "preset_ta_kavya",
+            displayName = "Kavya — Chennai Expressive",
+            geminiVoiceName = "Despina",
+            category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "ta-IN",
+            languageName = "Tamil",
+            countryFlag = "🇮🇳",
+            accent = "Chennai Tamil",
+            tone = "Smooth & Bright",
+            description = "Clear, expressive Tamil voice tuned for storytelling, explainers, and friendly chat.",
+            tags = listOf("தமிழ்", "Expressive", "Clear"),
+            previewSampleText = "வணக்கம்! VoxCraft AI ஸ்டுடியோவில் உங்கள் குரலை உயிர்ப்பிக்க தயாராகுங்கள்.",
+            characterDirective = "Speak naturally in fluent Chennai Tamil (தமிழ்)."
+        ),
+        VoicePreset(
+            id = "preset_te_vihan",
+            displayName = "Vihan — Hyderabad Narrator",
+            geminiVoiceName = "Gacrux",
+            category = VoiceCategory.STORYTELLING,
+            languageCode = "te-IN",
+            languageName = "Telugu",
+            countryFlag = "🇮🇳",
+            accent = "Hyderabad Telugu",
+            tone = "Warm & Mature",
+            description = "Expressive Telugu narrator with natural rhythmic charm for videos and stories.",
+            tags = listOf("తెలుగు", "Narrator", "Warm"),
+            previewSampleText = "నమస్కారం! VoxCraft AI లో అద్భుతమైన సహజమైన వాయిస్‌లను సృష్టించండి.",
+            characterDirective = "Speak naturally in fluent Telugu (తెలుగు)."
+        ),
+        VoicePreset(
+            id = "preset_mr_sai",
+            displayName = "Saee — Pune Studio Voice",
+            geminiVoiceName = "Callirrhoe",
+            category = VoiceCategory.ASSISTANT,
+            languageCode = "mr-IN",
+            languageName = "Marathi",
+            countryFlag = "🇮🇳",
+            accent = "Pune Marathi",
+            tone = "Clear & Friendly",
+            description = "Natural Marathi voice with crisp pronunciation for narration and modern assistants.",
+            tags = listOf("मराठी", "Friendly", "Studio"),
+            previewSampleText = "नमस्कार! VoxCraft स्टुडिओमध्ये तुमचं मनापासून स्वागत आहे.",
+            characterDirective = "Speak naturally in crisp Pune Marathi (मराठी)."
+        ),
+        VoicePreset(
+            id = "preset_ur_zoya",
+            displayName = "Zoya — Lahore Poetic",
+            geminiVoiceName = "Aoede",
+            category = VoiceCategory.STORYTELLING,
+            languageCode = "ur-PK",
+            languageName = "Urdu",
+            countryFlag = "🇵🇰",
+            accent = "Classic Urdu",
+            tone = "Graceful & Warm",
+            description = "Refined, graceful Urdu voice crafted for poetry, drama, and expressive storytelling.",
+            tags = listOf("اردو", "Poetic", "Warm"),
+            previewSampleText = "السلام علیکم! آج ہم لفظوں کو احساس اور آواز کی نئی زندگی دیں گے۔",
+            characterDirective = "Speak gracefully in fluent, poetic Urdu (اردو)."
+        ),
+
+        // --- Global Multilingual Voice Characters ---
+        VoicePreset(
+            id = "preset_es_sofia",
+            displayName = "Sofía — Madrid Storyteller",
+            geminiVoiceName = "Laomedeia",
+            category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "es-ES",
+            languageName = "Spanish",
+            countryFlag = "🇪🇸",
+            accent = "Castilian Spanish",
+            tone = "Radiant & Lively",
+            description = "Vibrant Spanish voice with expressive warmth for podcasts, reels, and assistants.",
+            tags = listOf("Español", "Lively", "Podcast"),
+            previewSampleText = "¡Hola! [happy] Bienvenido a VoxCraft AI, donde cada emoción suena completamente real.",
+            characterDirective = "Speak fluently in natural Spanish (Español)."
+        ),
+        VoicePreset(
+            id = "preset_es_mateo",
+            displayName = "Mateo — CDMX Creator",
+            geminiVoiceName = "Puck",
+            category = VoiceCategory.CHARACTER,
+            languageCode = "es-MX",
+            languageName = "Spanish (Mexico)",
+            countryFlag = "🇲🇽",
+            accent = "Mexican Spanish",
+            tone = "Friendly & Dynamic",
+            description = "Charismatic Latin American Spanish speaker ideal for entertainment and social media.",
+            tags = listOf("Español MX", "Creator", "Upbeat"),
+            previewSampleText = "¡Qué tal! [excited] Prueba escribir cualquier emoción entre corchetes y escucha la magia.",
+            characterDirective = "Speak naturally in charismatic Mexican Spanish."
+        ),
+        VoicePreset(
+            id = "preset_fr_camille",
+            displayName = "Camille — Paris Cinema",
+            geminiVoiceName = "Erinome",
+            category = VoiceCategory.STORYTELLING,
+            languageCode = "fr-FR",
+            languageName = "French",
+            countryFlag = "🇫🇷",
+            accent = "Parisian French",
+            tone = "Refined & Velvety",
+            description = "Elegant Parisian voice built for luxury narration, cinema essays, and podcasts.",
+            tags = listOf("Français", "Paris", "Elegant"),
+            previewSampleText = "Bonjour. [warmly] Découvrez une synthèse vocale fluide, nuancée et profondément humaine.",
+            characterDirective = "Speak fluently in elegant Parisian French (Français)."
+        ),
+        VoicePreset(
+            id = "preset_de_lukas",
+            displayName = "Lukas — Berlin Tech Anchor",
+            geminiVoiceName = "Alnilam",
+            category = VoiceCategory.BROADCAST,
+            languageCode = "de-DE",
+            languageName = "German",
+            countryFlag = "🇩🇪",
+            accent = "Standard German",
+            tone = "Precise & Firm",
+            description = "Crisp German studio voice tailored for product demos, tech documentaries, and narration.",
+            tags = listOf("Deutsch", "Precise", "Tech"),
+            previewSampleText = "Willkommen bei VoxCraft AI. Präzise Sprachsynthese mit natürlicher menschlicher Dynamik.",
+            characterDirective = "Speak crisply in standard German (Deutsch)."
+        ),
+        VoicePreset(
+            id = "preset_ja_sakura",
+            displayName = "Sakura — Tokyo Anime & Studio",
+            geminiVoiceName = "Sadachbia",
+            category = VoiceCategory.CHARACTER,
+            languageCode = "ja-JP",
+            languageName = "Japanese",
+            countryFlag = "🇯🇵",
+            accent = "Tokyo Japanese",
+            tone = "Expressive & Clear",
+            description = "Nimble, expressive Japanese voice perfect for character acting, narration, and companions.",
+            tags = listOf("日本語", "Character", "Tokyo"),
+            previewSampleText = "こんにちは！[happy] VoxCraftスタジオへようこそ。感情たっぷりに話せますよ！",
+            characterDirective = "Speak naturally in expressive standard Tokyo Japanese (日本語)."
+        ),
+        VoicePreset(
+            id = "preset_ja_haruto",
+            displayName = "Haruto — Kyoto Calm Narrator",
+            geminiVoiceName = "Algieba",
+            category = VoiceCategory.CALM,
+            languageCode = "ja-JP",
+            languageName = "Japanese",
+            countryFlag = "🇯🇵",
+            accent = "Calm Japanese",
+            tone = "Smooth & Poised",
+            description = "Smooth, unhurried Japanese narrator crafted for essays, audiobooks, and calm videos.",
+            tags = listOf("日本語", "Calm", "Narrator"),
+            previewSampleText = "静かな夜のスタジオで、言葉のひとつひとつに命が吹き込まれていきます。",
+            characterDirective = "Speak smoothly in calm, poised Japanese (日本語)."
+        ),
+        VoicePreset(
+            id = "preset_ko_minji",
+            displayName = "Min-ji — Seoul Conversational",
+            geminiVoiceName = "Autonoe",
+            category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "ko-KR",
+            languageName = "Korean",
+            countryFlag = "🇰🇷",
+            accent = "Seoul Korean",
+            tone = "Bright & Natural",
+            description = "Modern Seoul Korean speaker with warm natural rhythm for vlogs and AI companions.",
+            tags = listOf("한국어", "Seoul", "Modern"),
+            previewSampleText = "안녕하세요! [warmly] VoxCraft AI에서 생생하고 자연스러운 음성을 만들어 보세요.",
+            characterDirective = "Speak naturally in modern Seoul Korean (한국어)."
+        ),
+        VoicePreset(
+            id = "preset_zh_lin",
+            displayName = "Lin — Mandarin Broadcast",
+            geminiVoiceName = "Iapetus",
+            category = VoiceCategory.BROADCAST,
+            languageCode = "zh-CN",
+            languageName = "Mandarin Chinese",
+            countryFlag = "🇨🇳",
+            accent = "Standard Mandarin",
+            tone = "Clear & Direct",
+            description = "Crisp Mandarin studio voice designed for explainers, narration, and global media.",
+            tags = listOf("中文", "Clear", "Studio"),
+            previewSampleText = "你好！欢迎来到 VoxCraft 语音工作室，体验逼真的情感语音合成。",
+            characterDirective = "Speak clearly in standard Mandarin Chinese (中文)."
+        ),
+        VoicePreset(
+            id = "preset_ar_layla",
+            displayName = "Layla — Arabic Storyteller",
+            geminiVoiceName = "Sadaltager",
+            category = VoiceCategory.STORYTELLING,
+            languageCode = "ar-SA",
+            languageName = "Arabic",
+            countryFlag = "🇸🇦",
+            accent = "Modern Standard Arabic",
+            tone = "Resonant & Warm",
+            description = "Eloquent Arabic narrator tuned for storytelling, podcasts, and documentaries.",
+            tags = listOf("العربية", "Story", "Warm"),
+            previewSampleText = "أهلاً بك في استوديو فوكس كرافت الصوتي، حيث تتحول الكلمات إلى صوت نابض بالحياة.",
+            characterDirective = "Speak eloquently in natural Modern Standard Arabic (العربية)."
+        ),
+        VoicePreset(
+            id = "preset_pt_rafael",
+            displayName = "Rafael — São Paulo Host",
+            geminiVoiceName = "Pulcherrima",
+            category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "pt-BR",
+            languageName = "Portuguese (Brazil)",
+            countryFlag = "🇧🇷",
+            accent = "Brazilian Portuguese",
+            tone = "Confident & Warm",
+            description = "Charismatic Brazilian Portuguese host ideal for podcasts, videos, and launches.",
+            tags = listOf("Português", "Brazil", "Host"),
+            previewSampleText = "Olá! [excited] Bem-vindo ao VoxCraft AI—crie vozes incrivelmente humanas em segundos.",
+            characterDirective = "Speak naturally in warm Brazilian Portuguese."
+        ),
+        VoicePreset(
+            id = "preset_it_elena",
+            displayName = "Elena — Milan Expressive",
+            geminiVoiceName = "Achird",
+            category = VoiceCategory.CONVERSATIONAL,
+            languageCode = "it-IT",
+            languageName = "Italian",
+            countryFlag = "🇮🇹",
+            accent = "Italian Studio",
+            tone = "Warm & Expressive",
+            description = "Expressive Italian voice with natural musical cadence for narration and lifestyle media.",
+            tags = listOf("Italiano", "Warm", "Expressive"),
+            previewSampleText = "Ciao! [warmly] Benvenuto in VoxCraft Studio, pronto a dare anima a ogni parola.",
+            characterDirective = "Speak warmly in natural Italian (Italiano)."
         ),
         VoicePreset(
             id = "preset_enceladus",
-            displayName = "Enceladus — Midnight Calm",
+            displayName = "Enceladus — Midnight Whisper",
             geminiVoiceName = "Enceladus",
             category = VoiceCategory.CALM,
-            accent = "Soft Neutral",
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
+            accent = "Close-Mic Soft",
             tone = "Breathy & Gentle",
-            description = "Intimate, soft-spoken breathy tone tailored for mindfulness, sleep guides, and ASMR.",
-            tags = listOf("Breathy", "Mindfulness", "Soft"),
-            previewSampleText = "Take a slow breath in, let your shoulders drop, and listen to the quiet rhythm of the room."
-        ),
-        VoicePreset(
-            id = "preset_leda",
-            displayName = "Leda — Youthful Host",
-            geminiVoiceName = "Leda",
-            category = VoiceCategory.CONVERSATIONAL,
-            accent = "US Modern",
-            tone = "Youthful & Agile",
-            description = "Agile, modern voice with natural smile intonation for explainers and mobile companions.",
-            tags = listOf("Modern", "Explainer", "Agile"),
-            previewSampleText = "This takes literally ten seconds—just drop your script in and dial up the emotion."
-        ),
-        VoicePreset(
-            id = "preset_orus",
-            displayName = "Orus — Executive Keynote",
-            geminiVoiceName = "Orus",
-            category = VoiceCategory.BROADCAST,
-            accent = "US Executive",
-            tone = "Firm & Poised",
-            description = "Confident keynote speaker with measured cadence for product launches and fintech.",
-            tags = listOf("Keynote", "Executive", "Poised"),
-            previewSampleText = "Precision engineering means zero compromise between latency and vocal warmth."
-        ),
-        VoicePreset(
-            id = "preset_sulafat",
-            displayName = "Sulafat — Warm Fireside",
-            geminiVoiceName = "Sulafat",
-            category = VoiceCategory.STORYTELLING,
-            accent = "Warm Global",
-            tone = "Warm & Inviting",
-            description = "Richly empathetic storytelling voice that wraps listeners in effortless warmth.",
-            tags = listOf("Empathetic", "Story", "Rich"),
-            previewSampleText = "Every great story begins with a voice that makes you lean in just a little closer."
-        ),
-        VoicePreset(
-            id = "preset_callirrhoe",
-            displayName = "Callirrhoe — Easygoing Guide",
-            geminiVoiceName = "Callirrhoe",
-            category = VoiceCategory.CONVERSATIONAL,
-            accent = "US West Coast",
-            tone = "Easygoing & Natural",
-            description = "Laid-back, friendly guide that sounds like talking to a sharp coworker over coffee.",
-            tags = listOf("Easygoing", "Support", "Natural"),
-            previewSampleText = "No rush at all—we can tweak the speed and warmth until it feels completely effortless."
+            description = "Intimate, soft-spoken breathy tone tailored for mindfulness, ASMR, and late-night narration.",
+            tags = listOf("Breathy", "Mindfulness", "ASMR"),
+            previewSampleText = "[whisper] Take a slow breath in, let your shoulders drop, and feel the stillness."
         ),
         VoicePreset(
             id = "preset_umbriel",
-            displayName = "Umbriel — Noir Narrator",
+            displayName = "Umbriel — Noir Detective",
             geminiVoiceName = "Umbriel",
             category = VoiceCategory.CHARACTER,
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
             accent = "Velvet Low",
-            tone = "Easygoing & Deep",
-            description = "Smooth low-register voice ideal for mystery fiction, audio dramas, and late-night radio.",
-            tags = listOf("Noir", "Deep", "Audio Drama"),
+            tone = "Deep & Cinematic",
+            description = "Smooth low-register character voice ideal for mystery audio dramas and noir thrillers.",
+            tags = listOf("Noir", "Deep", "Character"),
             previewSampleText = "Rain tapped against the studio glass while the tape reels spun quietly into the dark."
-        ),
-        VoicePreset(
-            id = "preset_algieba",
-            displayName = "Algieba — Smooth Lounge",
-            geminiVoiceName = "Algieba",
-            category = VoiceCategory.CALM,
-            accent = "Smooth Neutral",
-            tone = "Smooth & Silky",
-            description = "Velvety, unhurried delivery that stays poised across long-form narrations.",
-            tags = listOf("Smooth", "Long-Form", "Poised"),
-            previewSampleText = "Seamless pacing keeps your audience immersed from the opening hook to the final note."
-        ),
-        VoicePreset(
-            id = "preset_despina",
-            displayName = "Despina — Polished Studio",
-            geminiVoiceName = "Despina",
-            category = VoiceCategory.BROADCAST,
-            accent = "Clean Studio",
-            tone = "Smooth & Clear",
-            description = "Broadcast-ready smooth voice crafted for e-learning modules and premium commercials.",
-            tags = listOf("Commercial", "E-Learning", "Polished"),
-            previewSampleText = "Clarity and emotion work together when every syllable lands right on beat."
-        ),
-        VoicePreset(
-            id = "preset_achird",
-            displayName = "Achird — Friendly Companion",
-            geminiVoiceName = "Achird",
-            category = VoiceCategory.ASSISTANT,
-            accent = "US Warm",
-            tone = "Friendly & Approachable",
-            description = "Approachable everyday assistant voice with genuine conversational warmth.",
-            tags = listOf("Companion", "Approachable", "Warm"),
-            previewSampleText = "Whenever you're ready, tap record and we'll map your vocal signature in seconds."
         ),
         VoicePreset(
             id = "preset_algenib",
             displayName = "Algenib — Gravelly Legend",
             geminiVoiceName = "Algenib",
             category = VoiceCategory.CHARACTER,
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
             accent = "Textured Low",
             tone = "Gravelly & Iconic",
-            description = "Textured, weathered character voice packed with grit for RPG quests and gritty promos.",
-            tags = listOf("Gravelly", "RPG", "Character"),
-            previewSampleText = "We've walked through louder storms than this—turn the gain up and let them hear us."
-        ),
-        VoicePreset(
-            id = "preset_vindemiatrix",
-            displayName = "Vindemiatrix — Serene Coach",
-            geminiVoiceName = "Vindemiatrix",
-            category = VoiceCategory.CALM,
-            accent = "Gentle Neutral",
-            tone = "Gentle & Reassuring",
-            description = "Gentle, reassuring cadence crafted for wellness coaching and calm tutorials.",
-            tags = listOf("Wellness", "Gentle", "Calm"),
-            previewSampleText = "You don't need to force perfection—just speak naturally and let the flow carry you."
-        ),
-        VoicePreset(
-            id = "preset_gacrux",
-            displayName = "Gacrux — Mature Narrator",
-            geminiVoiceName = "Gacrux",
-            category = VoiceCategory.STORYTELLING,
-            accent = "Classic Studio",
-            tone = "Mature & Wise",
-            description = "Seasoned, thoughtful narrator with gravitas for biographies and historical storytelling.",
-            tags = listOf("Biography", "Wise", "Classic"),
-            previewSampleText = "History remembers not only what was written, but the cadence of the voice that spoke it."
-        ),
-        VoicePreset(
-            id = "preset_laomedeia",
-            displayName = "Laomedeia — Spark Creator",
-            geminiVoiceName = "Laomedeia",
-            category = VoiceCategory.CONVERSATIONAL,
-            accent = "Bright US",
-            tone = "Upbeat & Radiant",
-            description = "Sparkling, energetic voice built for short-form hooks, Reels, and upbeat launches.",
-            tags = listOf("Shorts", "Radiant", "Energetic"),
-            previewSampleText = "Wait until you hear how realistic the humanization sliders sound on this take!"
-        ),
-        VoicePreset(
-            id = "preset_rasalgethi",
-            displayName = "Rasalgethi — Tech Analyst",
-            geminiVoiceName = "Rasalgethi",
-            category = VoiceCategory.BROADCAST,
-            accent = "Sharp Studio",
-            tone = "Informative & Sharp",
-            description = "Analytical, articulate tech host built for deep-dive explainers and product demos.",
-            tags = listOf("Tech", "Demo", "Articulate"),
-            previewSampleText = "Notice how the emotion vector shifts prosody naturally without introducing robotic artifacts."
-        ),
-        VoicePreset(
-            id = "preset_sadachbia",
-            displayName = "Sadachbia — Lively Story",
-            geminiVoiceName = "Sadachbia",
-            category = VoiceCategory.CHARACTER,
-            accent = "Expressive Global",
-            tone = "Lively & Animated",
-            description = "Playful, animated voice with nimble pitch range for interactive fiction and comedy.",
-            tags = listOf("Animated", "Playful", "Story"),
-            previewSampleText = "Hold on—did that synthesizer just laugh right on cue? Oh, this studio is dangerous!"
+            description = "Textured, weathered character voice packed with grit for RPG quests and dramatic promos.",
+            tags = listOf("Gravelly", "RPG", "Bold"),
+            previewSampleText = "[confident] We've walked through louder storms than this—turn the gain up."
         ),
         VoicePreset(
             id = "preset_schedar",
-            displayName = "Schedar — Balanced Pro",
+            displayName = "Schedar — Studio Concierge",
             geminiVoiceName = "Schedar",
             category = VoiceCategory.ASSISTANT,
+            languageCode = "en-US",
+            languageName = "English (US)",
+            countryFlag = "🇺🇸",
             accent = "Neutral Studio",
             tone = "Even & Dependable",
-            description = "Dependable, even-keeled voice that stays consistent across long technical scripts.",
-            tags = listOf("Consistent", "Technical", "Clean"),
-            previewSampleText = "Your custom voice profiles and WAV renders are saved privately right on this device."
-        ),
-        VoicePreset(
-            id = "preset_autonoe",
-            displayName = "Autonoe — Radiant Host",
-            geminiVoiceName = "Autonoe",
-            category = VoiceCategory.BROADCAST,
-            accent = "Bright Studio",
-            tone = "Bright & Engaging",
-            description = "Clear, magnetic host voice suited for morning shows, promos, and live announcements.",
-            tags = listOf("Host", "Promo", "Bright"),
-            previewSampleText = "Good morning creators—today we're crafting cinema-grade speech right from your pocket."
-        ),
-        VoicePreset(
-            id = "preset_iapetus",
-            displayName = "Iapetus — Studio Clarifier",
-            geminiVoiceName = "Iapetus",
-            category = VoiceCategory.BROADCAST,
-            accent = "Crisp Neutral",
-            tone = "Clear & Direct",
-            description = "Direct, articulate voice engineered for crisp training videos and tutorials.",
-            tags = listOf("Tutorial", "Direct", "Crisp"),
-            previewSampleText = "Adjust speed from point six to one point five while preserving natural vocal resonance."
-        ),
-        VoicePreset(
-            id = "preset_erinome",
-            displayName = "Erinome — Pure Vocalist",
-            geminiVoiceName = "Erinome",
-            category = VoiceCategory.CALM,
-            accent = "Clear Neutral",
-            tone = "Clear & Poised",
-            description = "Transparent, refined vocal tone with minimal coloration for pure studio clarity.",
-            tags = listOf("Pure", "Refined", "Clear"),
-            previewSampleText = "Listen closely to the subtle acoustic space between each phrase."
-        ),
-        VoicePreset(
-            id = "preset_achernar",
-            displayName = "Achernar — Soft Whisper",
-            geminiVoiceName = "Achernar",
-            category = VoiceCategory.CALM,
-            accent = "Soft Studio",
-            tone = "Soft & Intimate",
-            description = "Delicate, soothing voice ideal for calm guidance, poetry, and gentle narration.",
-            tags = listOf("Poetry", "Intimate", "Soothing"),
-            previewSampleText = "Quiet words carry further than thunder when delivered with genuine calm."
-        ),
-        VoicePreset(
-            id = "preset_alnilam",
-            displayName = "Alnilam — Bold Presenter",
-            geminiVoiceName = "Alnilam",
-            category = VoiceCategory.BROADCAST,
-            accent = "US Firm",
-            tone = "Firm & Decisive",
-            description = "Decisive, punchy presenter tone built for high-impact decks and commercials.",
-            tags = listOf("Punchy", "Presenter", "Firm"),
-            previewSampleText = "Zero paywalls, zero credit counters, and unlimited voice cloning—ready right now."
-        ),
-        VoicePreset(
-            id = "preset_pulcherrima",
-            displayName = "Pulcherrima — Forward Spark",
-            geminiVoiceName = "Pulcherrima",
-            category = VoiceCategory.CONVERSATIONAL,
-            accent = "Energetic US",
-            tone = "Forward & Confident",
-            description = "Confident, forward-leaning voice made for modern startup pitches and hooks.",
-            tags = listOf("Startup", "Confident", "Modern"),
-            previewSampleText = "Let's ship a voice experience that feels instantaneous, expressive, and unmistakably yours."
-        ),
-        VoicePreset(
-            id = "preset_zubenelgenubi",
-            displayName = "Zuben — Casual Buddy",
-            geminiVoiceName = "Zubenelgenubi",
-            category = VoiceCategory.CONVERSATIONAL,
-            accent = "US Relaxed",
-            tone = "Casual & Unscripted",
-            description = "Unscripted, authentic casual voice that sounds like a natural voice memo.",
-            tags = listOf("Voice Memo", "Casual", "Authentic"),
-            previewSampleText = "Honestly, once you hear the humanize toggle kick in, it barely sounds synthetic at all."
-        ),
-        VoicePreset(
-            id = "preset_sadaltager",
-            displayName = "Sadaltager — Knowledge Mentor",
-            geminiVoiceName = "Sadaltager",
-            category = VoiceCategory.STORYTELLING,
-            accent = "Warm Academic",
-            tone = "Knowledgeable & Warm",
-            description = "Thoughtful educator and documentary mentor who makes complex ideas effortless.",
-            tags = listOf("Educator", "Mentor", "Documentary"),
-            previewSampleText = "When cadence, breath, and emotional intent align, speech becomes truly memorable."
+            description = "Dependable, even-keeled AI assistant voice that stays crystal clear across long scripts.",
+            tags = listOf("Assistant", "Clean", "Technical"),
+            previewSampleText = "Every audio clip can be saved directly to your device or shared in one tap."
         )
     )
 
@@ -565,9 +785,13 @@ object VoiceCatalog {
         geminiVoiceName = preset.geminiVoiceName,
         isCloned = false,
         categoryLabel = preset.category.label,
+        languageCode = preset.languageCode,
+        languageName = preset.languageName,
+        countryFlag = preset.countryFlag,
         accent = preset.accent,
         description = preset.description,
         tags = preset.tags,
+        acousticDnaPrompt = preset.characterDirective,
         waveformSignature = preset.waveformSignature
     )
 }

@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -59,11 +60,37 @@ import com.example.model.StudioVoice
 import com.example.model.VoiceCatalog
 import com.example.model.VoiceCategory
 import com.example.ui.components.MiniVoiceSignature
+import com.example.ui.components.StudioGlassCard
 
 private data class VoiceDisplayItem(
     val voice: StudioVoice,
     val previewSampleText: String,
     val cloneEntity: ClonedVoiceEntity? = null
+)
+
+private data class VoiceLangFilterChip(
+    val code: String,
+    val label: String
+)
+
+private val VoiceLanguageFilterChips = listOf(
+    VoiceLangFilterChip("ALL", "🌐 All Languages"),
+    VoiceLangFilterChip("bn", "🇧🇩🇮🇳 Bengali"),
+    VoiceLangFilterChip("hi", "🇮🇳 Hindi"),
+    VoiceLangFilterChip("en", "🇺🇸🇬🇧 English"),
+    VoiceLangFilterChip("ta", "🇮🇳 Tamil"),
+    VoiceLangFilterChip("te", "🇮🇳 Telugu"),
+    VoiceLangFilterChip("mr", "🇮🇳 Marathi"),
+    VoiceLangFilterChip("ur", "🇵🇰 Urdu"),
+    VoiceLangFilterChip("es", "🇪🇸 Spanish"),
+    VoiceLangFilterChip("fr", "🇫🇷 French"),
+    VoiceLangFilterChip("de", "🇩🇪 German"),
+    VoiceLangFilterChip("ja", "🇯🇵 Japanese"),
+    VoiceLangFilterChip("ko", "🇰🇷 Korean"),
+    VoiceLangFilterChip("zh", "🇨🇳 Chinese"),
+    VoiceLangFilterChip("ar", "🇸🇦 Arabic"),
+    VoiceLangFilterChip("pt", "🇧🇷 Portuguese"),
+    VoiceLangFilterChip("it", "🇮🇹 Italian")
 )
 
 @Composable
@@ -73,24 +100,31 @@ fun VoiceLibraryScreen(
     favoriteVoiceIds: Set<String>,
     searchQuery: String,
     selectedCategory: VoiceCategory,
+    selectedLanguageCode: String,
     previewingVoiceId: String?,
     toStudioVoice: (ClonedVoiceEntity) -> StudioVoice,
     onSearchChange: (String) -> Unit,
     onCategoryChange: (VoiceCategory) -> Unit,
+    onLanguageFilterChange: (String) -> Unit,
     onToggleFavorite: (String) -> Unit,
     onPreviewVoice: (StudioVoice, String) -> Unit,
     onUseVoice: (StudioVoice) -> Unit,
     onDeleteClone: (ClonedVoiceEntity) -> Unit,
     onOpenCloneLab: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var pendingDeleteClone by remember { mutableStateOf<ClonedVoiceEntity?>(null) }
 
-    val mergedVoices = remember(clonedVoices, favoriteVoiceIds, searchQuery, selectedCategory) {
+    val mergedVoices = remember(clonedVoices, favoriteVoiceIds, searchQuery, selectedCategory, selectedLanguageCode) {
         val cloneItems = clonedVoices.map { entity ->
             VoiceDisplayItem(
                 voice = toStudioVoice(entity),
-                previewSampleText = "Hello! This is ${entity.name}, your custom cloned voice inside VoxCraft Studio.",
+                previewSampleText = when {
+                    entity.languageCode.startsWith("bn") -> "নমস্কার! [warmly] আমি ${entity.name}, আপনার কাস্টম ক্লোন ভয়েস।"
+                    entity.languageCode.startsWith("hi") -> "नमस्ते! [warmly] मैं ${entity.name} हूँ, आपकी क्लोन की गई आवाज़।"
+                    else -> "Hello! [warmly] This is ${entity.name}, your custom cloned voice inside VoxCraft Studio."
+                },
                 cloneEntity = entity
             )
         }
@@ -111,12 +145,15 @@ fun VoiceLibraryScreen(
                 VoiceCategory.FAVORITES -> favoriteVoiceIds.contains(item.voice.id)
                 else -> !item.voice.isCloned && item.voice.categoryLabel == selectedCategory.label
             }
+            val matchesLang = selectedLanguageCode == "ALL" ||
+                item.voice.languageCode.lowercase().startsWith(selectedLanguageCode.lowercase())
             val matchesQuery = q.isEmpty() ||
                 item.voice.displayName.lowercase().contains(q) ||
+                item.voice.languageName.lowercase().contains(q) ||
                 item.voice.accent.lowercase().contains(q) ||
                 item.voice.description.lowercase().contains(q) ||
                 item.voice.tags.any { it.lowercase().contains(q) }
-            matchesCategory && matchesQuery
+            matchesCategory && matchesLang && matchesQuery
         }
     }
 
@@ -130,40 +167,56 @@ fun VoiceLibraryScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Voice Library",
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${VoiceCatalog.presets.size} Neural Voices • ${clonedVoices.size} Clones",
+                    text = "${VoiceCatalog.presets.size} Multilingual Characters • ${clonedVoices.size} Clones",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary
                 )
             }
 
-            Button(
-                onClick = onOpenCloneLab,
-                modifier = Modifier.testTag("voices_new_clone_button"),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.secondary,
-                    contentColor = MaterialTheme.colorScheme.onSecondary
-                ),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "New voice clone",
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("New Clone", style = MaterialTheme.typography.labelLarge)
+                Button(
+                    onClick = onOpenCloneLab,
+                    modifier = Modifier.testTag("voices_new_clone_button"),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondary,
+                        contentColor = MaterialTheme.colorScheme.onSecondary
+                    ),
+                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 9.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "New voice clone",
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Clone", style = MaterialTheme.typography.labelLarge)
+                }
+
+                IconButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Settings,
+                        contentDescription = "Studio settings",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(modifier = Modifier.height(10.dp))
 
         OutlinedTextField(
             value = searchQuery,
@@ -175,7 +228,7 @@ fun VoiceLibraryScreen(
             shape = RoundedCornerShape(14.dp),
             placeholder = {
                 Text(
-                    text = "Search voices, accents, or moods…",
+                    text = "Search Bengali, Hindi, English, accents, characters…",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -199,15 +252,51 @@ fun VoiceLibraryScreen(
                 }
             },
             colors = OutlinedTextFieldDefaults.colors(
-                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.85f),
+                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.85f),
                 focusedBorderColor = MaterialTheme.colorScheme.primary,
                 unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
             )
         )
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
+        // Language filter strip with country flags
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            VoiceLanguageFilterChips.forEach { chip ->
+                val selected = selectedLanguageCode == chip.code
+                FilterChip(
+                    selected = selected,
+                    onClick = { onLanguageFilterChange(chip.code) },
+                    modifier = Modifier.testTag("voice_lang_filter_${chip.code}"),
+                    label = {
+                        Text(
+                            text = chip.label,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                        selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        labelColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    ),
+                    border = FilterChipDefaults.filterChipBorder(
+                        enabled = true,
+                        selected = selected,
+                        borderColor = MaterialTheme.colorScheme.outlineVariant,
+                        selectedBorderColor = MaterialTheme.colorScheme.primary
+                    )
+                )
+            }
+        }
+
+        // Category filter strip
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -234,12 +323,12 @@ fun VoiceLibraryScreen(
                         selectedContainerColor = if (category == VoiceCategory.MY_CLONES) {
                             MaterialTheme.colorScheme.secondaryContainer
                         } else {
-                            MaterialTheme.colorScheme.primaryContainer
+                            MaterialTheme.colorScheme.surfaceContainerHighest
                         },
                         selectedLabelColor = if (category == VoiceCategory.MY_CLONES) {
                             MaterialTheme.colorScheme.onSecondaryContainer
                         } else {
-                            MaterialTheme.colorScheme.onPrimaryContainer
+                            MaterialTheme.colorScheme.onSurface
                         },
                         containerColor = MaterialTheme.colorScheme.surfaceContainer,
                         labelColor = MaterialTheme.colorScheme.onSurfaceVariant
@@ -258,7 +347,7 @@ fun VoiceLibraryScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
         if (mergedVoices.isEmpty()) {
             EmptyVoicesCard(
@@ -334,16 +423,12 @@ private fun VoiceLibraryCard(
     val voice = item.voice
     val accentColor = if (voice.isCloned) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
 
-    Surface(
+    StudioGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("voice_card_${voice.id}"),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(
-            width = if (isSelected) 1.5.dp else 1.dp,
-            color = if (isSelected) accentColor else MaterialTheme.colorScheme.outlineVariant
-        )
+        accentBorder = if (isSelected) accentColor else null
     ) {
         Column(
             modifier = Modifier
@@ -358,13 +443,13 @@ private fun VoiceLibraryCard(
                 MiniVoiceSignature(
                     peaks = voice.waveformSignature,
                     accentColor = accentColor,
-                    modifier = Modifier.width(52.dp)
+                    modifier = Modifier.width(48.dp)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = voice.displayName,
+                            text = "${voice.countryFlag} ${voice.displayName}",
                             style = MaterialTheme.typography.titleMedium,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
@@ -387,9 +472,11 @@ private fun VoiceLibraryCard(
                         }
                     }
                     Text(
-                        text = "${voice.accent} • ${voice.categoryLabel}",
+                        text = "${voice.languageName} • ${voice.accent} • ${voice.categoryLabel}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
@@ -534,13 +621,11 @@ private fun EmptyVoicesCard(
     isCloneTab: Boolean,
     onOpenCloneLab: () -> Unit
 ) {
-    Surface(
+    StudioGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .padding(top = 24.dp),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        shape = RoundedCornerShape(20.dp)
     ) {
         Column(
             modifier = Modifier
@@ -564,7 +649,7 @@ private fun EmptyVoicesCard(
                 text = if (isCloneTab) {
                     stringResource(R.string.empty_clones_subtitle)
                 } else {
-                    "Try a different search keyword or switch category filters."
+                    "Try a different language filter or search keyword."
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

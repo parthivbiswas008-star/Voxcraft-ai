@@ -5,9 +5,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 
-private val ColorErrorSoft = androidx.compose.ui.graphics.Color(0xFFFDA4AF)
+private val ColorErrorSoft = Color(0xFFFDA4AF)
 
 private val VoxCraftDarkColorScheme = darkColorScheme(
     primary = ElectricCyan,
@@ -41,6 +45,26 @@ private val VoxCraftDarkColorScheme = darkColorScheme(
     onErrorContainer = ColorErrorSoft
 )
 
+private val VoxCraftAmoledColorScheme = VoxCraftDarkColorScheme.copy(
+    background = Color(0xFF000000),
+    surface = Color(0xFF000000),
+    surfaceContainerLowest = Color(0xFF000000),
+    surfaceContainerLow = Color(0xFF05070A),
+    surfaceContainer = Color(0xFF0A0D12),
+    surfaceContainerHigh = Color(0xFF11161F),
+    surfaceContainerHighest = Color(0xFF18202D),
+    outlineVariant = Color(0xFF1E293B)
+)
+
+@Immutable
+data class StudioAppearanceConfig(
+    val amoledDark: Boolean = false,
+    val liquidGlassEnabled: Boolean = true,
+    val glassBlurRadiusDp: Float = 16f
+)
+
+val LocalStudioAppearance = staticCompositionLocalOf { StudioAppearanceConfig() }
+
 val VoxCraftShapes = Shapes(
     extraSmall = RoundedCornerShape(8.dp),
     small = RoundedCornerShape(12.dp),
@@ -51,12 +75,24 @@ val VoxCraftShapes = Shapes(
 
 @Composable
 fun VoxCraftTheme(
+    amoledDark: Boolean = false,
+    liquidGlassEnabled: Boolean = true,
+    glassBlurRadiusDp: Float = 16f,
     content: @Composable () -> Unit
 ) {
-    MaterialTheme(
-        colorScheme = VoxCraftDarkColorScheme,
-        typography = VoxCraftTypography,
-        shapes = VoxCraftShapes,
-        content = content
+    val scheme = if (amoledDark) VoxCraftAmoledColorScheme else VoxCraftDarkColorScheme
+    val appearance = StudioAppearanceConfig(
+        amoledDark = amoledDark,
+        liquidGlassEnabled = liquidGlassEnabled,
+        glassBlurRadiusDp = glassBlurRadiusDp
     )
+
+    CompositionLocalProvider(LocalStudioAppearance provides appearance) {
+        MaterialTheme(
+            colorScheme = scheme,
+            typography = VoxCraftTypography,
+            shapes = VoxCraftShapes,
+            content = content
+        )
+    }
 }

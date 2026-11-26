@@ -36,15 +36,13 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
-import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
@@ -79,17 +77,24 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
+import com.example.data.AppSettings
 import com.example.model.EmotionPreset
 import com.example.model.HumanizationConfig
 import com.example.model.StudioInlineCues
+import com.example.model.StudioLanguage
 import com.example.model.SupportedStudioLanguages
 import com.example.model.SynthesisUiState
+import com.example.model.extractBracketedEmotions
+import com.example.ui.components.LanguagePickerDialog
 import com.example.ui.components.MiniVoiceSignature
+import com.example.ui.components.StudioGlassCard
 import com.example.viewmodel.PlaygroundUiState
 
 @Composable
 fun StudioPlaygroundScreen(
     state: PlaygroundUiState,
+    appSettings: AppSettings,
+    activeRefreshRateHz: Float,
     clonedVoicesCount: Int,
     onScriptChange: (String) -> Unit,
     onInsertCue: (String) -> Unit,
@@ -98,17 +103,20 @@ fun StudioPlaygroundScreen(
     onAutoHumanize: () -> Unit,
     onOpenVoicePicker: () -> Unit,
     onOpenCloneLab: () -> Unit,
+    onOpenSettings: () -> Unit,
     onToggleHumanizationExpanded: () -> Unit,
     onSpeedChange: (Float) -> Unit,
     onVolumeChange: (Float) -> Unit,
     onSelectEmotionPreset: (EmotionPreset) -> Unit,
     onEmotionAxisChange: (Float?, Float?, Float?, Float?, Float?) -> Unit,
     onToggleNaturalBreaths: (Boolean) -> Unit,
-    onLanguageChange: (String) -> Unit,
+    onLanguageChange: (StudioLanguage) -> Unit,
     onGenerateSpeech: () -> Unit,
     onDismissError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var showLanguageDialog by remember { mutableStateOf(false) }
+
     val wordCount by remember(state.scriptText) {
         derivedStateOf {
             state.scriptText.trim().split(Regex("\\s+")).count { it.isNotBlank() }
@@ -118,6 +126,9 @@ fun StudioPlaygroundScreen(
         derivedStateOf {
             if (wordCount == 0) 0 else ((wordCount / 2.5f) / state.humanization.speed).toInt().coerceAtLeast(1)
         }
+    }
+    val detectedEmotions by remember(state.scriptText) {
+        derivedStateOf { extractBracketedEmotions(state.scriptText) }
     }
 
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -131,12 +142,14 @@ fun StudioPlaygroundScreen(
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             StudioHeroHeader(
+                appSettings = appSettings,
+                activeRefreshRateHz = activeRefreshRateHz,
                 clonedVoicesCount = clonedVoicesCount,
                 lastLatencyMs = state.lastGeneratedLatencyMs,
-                onOpenCloneLab = onOpenCloneLab
+                onOpenCloneLab = onOpenCloneLab,
+                onOpenSettings = onOpenSettings
             )
 
-            // Transparent error surface
             if (state.synthesisState is SynthesisUiState.Error) {
                 StudioErrorBanner(
                     message = state.synthesisState.message,
@@ -163,6 +176,7 @@ fun StudioPlaygroundScreen(
                             state = state,
                             wordCount = wordCount,
                             estDurationSec = estDurationSec,
+                            detectedEmotions = detectedEmotions,
                             onScriptChange = onScriptChange,
                             onInsertCue = onInsertCue,
                             onClearScript = onClearScript,
@@ -187,7 +201,7 @@ fun StudioPlaygroundScreen(
                             onSelectEmotionPreset = onSelectEmotionPreset,
                             onEmotionAxisChange = onEmotionAxisChange,
                             onToggleNaturalBreaths = onToggleNaturalBreaths,
-                            onLanguageChange = onLanguageChange
+                            onOpenLanguagePicker = { showLanguageDialog = true }
                         )
                     }
                 }
@@ -200,6 +214,7 @@ fun StudioPlaygroundScreen(
                     state = state,
                     wordCount = wordCount,
                     estDurationSec = estDurationSec,
+                    detectedEmotions = detectedEmotions,
                     onScriptChange = onScriptChange,
                     onInsertCue = onInsertCue,
                     onClearScript = onClearScript,
@@ -219,31 +234,46 @@ fun StudioPlaygroundScreen(
                     onSelectEmotionPreset = onSelectEmotionPreset,
                     onEmotionAxisChange = onEmotionAxisChange,
                     onToggleNaturalBreaths = onToggleNaturalBreaths,
-                    onLanguageChange = onLanguageChange
+                    onOpenLanguagePicker = { showLanguageDialog = true }
                 )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
+
+    if (showLanguageDialog) {
+        LanguagePickerDialog(
+            title = "Select Speech Language",
+            languages = SupportedStudioLanguages,
+            selectedCode = state.humanization.languageCode,
+            onSelect = onLanguageChange,
+            onDismiss = { showLanguageDialog = false }
+        )
+    }
 }
 
 @Composable
 private fun StudioHeroHeader(
+    appSettings: AppSettings,
+    activeRefreshRateHz: Float,
     clonedVoicesCount: Int,
     lastLatencyMs: Long?,
-    onOpenCloneLab: () -> Unit
+    onOpenCloneLab: () -> Unit,
+    onOpenSettings: () -> Unit
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerLow.copy(
+            alpha = if (appSettings.liquidGlassEnabled) 0.78f else 1f
+        ),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(114.dp)
+                .height(122.dp)
         ) {
             Image(
                 painter = painterResource(id = R.drawable.img_studio_hero),
@@ -251,7 +281,7 @@ private fun StudioHeroHeader(
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .fillMaxSize()
-                    .alpha(0.42f)
+                    .alpha(0.40f)
             )
             Box(
                 modifier = Modifier
@@ -259,9 +289,9 @@ private fun StudioHeroHeader(
                     .background(
                         Brush.horizontalGradient(
                             colors = listOf(
-                                MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
-                                MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
-                                MaterialTheme.colorScheme.background.copy(alpha = 0.80f)
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.90f),
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.50f),
+                                MaterialTheme.colorScheme.background.copy(alpha = 0.84f)
                             )
                         )
                     )
@@ -269,7 +299,7 @@ private fun StudioHeroHeader(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                    .padding(horizontal = 14.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(
@@ -291,27 +321,53 @@ private fun StudioHeroHeader(
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     }
-                    Surface(
-                        shape = RoundedCornerShape(99.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                        Surface(
+                            shape = RoundedCornerShape(99.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.55f))
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Verified,
-                                contentDescription = "Unlocked Pro tier",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(5.dp))
-                            Text(
-                                text = stringResource(R.string.studio_badge_pro),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
+                            Row(
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Verified,
+                                    contentDescription = "Unlocked Pro tier",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = stringResource(R.string.studio_badge_pro),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+                        }
+
+                        Surface(
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .clickable(onClick = onOpenSettings)
+                                .testTag("open_settings_button"),
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.Settings,
+                                    contentDescription = "Studio settings and appearance",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -322,16 +378,20 @@ private fun StudioHeroHeader(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         TelemetryChip(
                             dotColor = MaterialTheme.colorScheme.tertiary,
-                            text = lastLatencyMs?.let { "LAST ${it}ms" } ?: "NEURAL TTS READY"
+                            text = lastLatencyMs?.let { "${it}ms" } ?: appSettings.performanceMode.badge
+                        )
+                        TelemetryChip(
+                            dotColor = MaterialTheme.colorScheme.primary,
+                            text = "${activeRefreshRateHz.toInt()}Hz"
                         )
                         TelemetryChip(
                             dotColor = MaterialTheme.colorScheme.secondary,
-                            text = "$clonedVoicesCount CLONES • ∞ FREE"
+                            text = "$clonedVoicesCount CLONES"
                         )
                     }
 
@@ -341,7 +401,7 @@ private fun StudioHeroHeader(
                             .clickable(onClick = onOpenCloneLab)
                             .testTag("hero_quick_clone_button"),
                         color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.85f),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.45f))
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.50f))
                     ) {
                         Text(
                             text = "+ Clone",
@@ -365,7 +425,7 @@ private fun TelemetryChip(dotColor: Color, text: String) {
                 .clip(CircleShape)
                 .background(dotColor)
         )
-        Spacer(modifier = Modifier.width(6.dp))
+        Spacer(modifier = Modifier.width(5.dp))
         Text(
             text = text,
             style = MaterialTheme.typography.labelSmall,
@@ -380,22 +440,14 @@ private fun ActiveVoiceSelectorCard(
     onClick: () -> Unit
 ) {
     val voice = state.selectedVoice
-    Surface(
+    StudioGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .clickable(onClick = onClick)
             .testTag("active_voice_selector_card"),
         shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(
-            width = 1.dp,
-            color = if (voice.isCloned) {
-                MaterialTheme.colorScheme.secondary.copy(alpha = 0.5f)
-            } else {
-                MaterialTheme.colorScheme.outlineVariant
-            }
-        )
+        accentBorder = if (voice.isCloned) MaterialTheme.colorScheme.secondary else null
     ) {
         Row(
             modifier = Modifier
@@ -406,17 +458,18 @@ private fun ActiveVoiceSelectorCard(
             MiniVoiceSignature(
                 peaks = voice.waveformSignature,
                 accentColor = if (voice.isCloned) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary,
-                modifier = Modifier.width(56.dp)
+                modifier = Modifier.width(52.dp)
             )
             Spacer(modifier = Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = voice.displayName,
+                        text = "${voice.countryFlag} ${voice.displayName}",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     if (voice.isCloned) {
                         Spacer(modifier = Modifier.width(8.dp))
@@ -435,7 +488,7 @@ private fun ActiveVoiceSelectorCard(
                 }
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = "${voice.accent} • ${voice.tags.take(3).joinToString(" · ")}",
+                    text = "${voice.languageName} • ${voice.accent} • ${voice.tags.take(2).joinToString(" · ")}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -456,17 +509,16 @@ private fun ScriptConsoleCard(
     state: PlaygroundUiState,
     wordCount: Int,
     estDurationSec: Int,
+    detectedEmotions: List<String>,
     onScriptChange: (String) -> Unit,
     onInsertCue: (String) -> Unit,
     onClearScript: () -> Unit,
     onUndoScript: () -> Unit,
     onAutoHumanize: () -> Unit
 ) {
-    Surface(
+    StudioGlassCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        shape = RoundedCornerShape(18.dp)
     ) {
         Column(
             modifier = Modifier
@@ -480,8 +532,8 @@ private fun ScriptConsoleCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "SCRIPT CONSOLE",
-                    style = MaterialTheme.typography.labelMedium,
+                    text = "SCRIPT CONSOLE  •  TYPE [emotion] TO ACT",
+                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Row(
@@ -540,20 +592,51 @@ private fun ScriptConsoleCard(
                 ),
                 shape = RoundedCornerShape(14.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.85f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = 0.85f),
+                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f),
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
                     cursorColor = MaterialTheme.colorScheme.primary
                 )
             )
 
-            // Expressive inline cue chips (Cartesia-style)
+            // Live detected [emotion] bracket strip
+            AnimatedVisibility(visible = detectedEmotions.isNotEmpty()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "ACTIVE EMOTIONS:",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.tertiary
+                    )
+                    detectedEmotions.forEach { emotion ->
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.85f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.tertiary.copy(alpha = 0.5f))
+                        ) {
+                            Text(
+                                text = "[$emotion]",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Quick-insert inline emotion tags
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(7.dp)
             ) {
                 StudioInlineCues.forEach { cue ->
                     Surface(
@@ -690,15 +773,11 @@ private fun HumanizationRackCard(
     onSelectEmotionPreset: (EmotionPreset) -> Unit,
     onEmotionAxisChange: (Float?, Float?, Float?, Float?, Float?) -> Unit,
     onToggleNaturalBreaths: (Boolean) -> Unit,
-    onLanguageChange: (String) -> Unit
+    onOpenLanguagePicker: () -> Unit
 ) {
-    var languageMenuOpen by remember { mutableStateOf(false) }
-
-    Surface(
+    StudioGlassCard(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+        shape = RoundedCornerShape(18.dp)
     ) {
         Column(
             modifier = Modifier
@@ -724,14 +803,14 @@ private fun HumanizationRackCard(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "HUMANIZATION & DELIVERY",
+                        text = "HUMANIZATION & LANGUAGE",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        text = "${String.format("%.2fx", config.speed)} • ${config.emotionPreset.label}",
+                        text = "${config.countryFlag} ${String.format("%.2fx", config.speed)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -751,63 +830,61 @@ private fun HumanizationRackCard(
                         .padding(top = 12.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    // Language selector & Natural Breathing toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Box {
-                            Surface(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { languageMenuOpen = true }
-                                    .testTag("language_selector_button"),
-                                shape = RoundedCornerShape(12.dp),
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                        Surface(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable(onClick = onOpenLanguagePicker)
+                                .testTag("language_selector_button"),
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Row(
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Language,
-                                        contentDescription = "Language",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(16.dp)
+                                    Text(
+                                        text = config.countryFlag,
+                                        style = MaterialTheme.typography.titleMedium
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = config.language,
                                         style = MaterialTheme.typography.labelMedium,
-                                        color = MaterialTheme.colorScheme.onSurface
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
-                            }
-                            DropdownMenu(
-                                expanded = languageMenuOpen,
-                                onDismissRequest = { languageMenuOpen = false }
-                            ) {
-                                SupportedStudioLanguages.forEach { lang ->
-                                    DropdownMenuItem(
-                                        text = { Text(lang) },
-                                        onClick = {
-                                            onLanguageChange(lang)
-                                            languageMenuOpen = false
-                                        }
-                                    )
-                                }
+                                Icon(
+                                    imageVector = Icons.Default.ExpandMore,
+                                    contentDescription = "Choose language",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
 
+                        Spacer(modifier = Modifier.width(12.dp))
+
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Organic Breaths",
+                                text = "Breaths",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
                             Switch(
                                 checked = config.naturalBreathsEnabled,
                                 onCheckedChange = onToggleNaturalBreaths,
@@ -820,7 +897,6 @@ private fun HumanizationRackCard(
                         }
                     }
 
-                    // Speed & Volume gain sliders (Cartesia exact ranges: 0.6–1.5x speed, 0.5–2.0x volume)
                     StudioMetricSlider(
                         label = "Speed",
                         valueDisplay = String.format("%.2fx", config.speed),

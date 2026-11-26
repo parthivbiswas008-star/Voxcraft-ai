@@ -1,6 +1,7 @@
 package com.example.audio
 
 import android.annotation.SuppressLint
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.media.AudioFormat
@@ -9,6 +10,9 @@ import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.example.model.AudioPlaybackState
@@ -25,9 +29,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import kotlin.math.abs
 import kotlin.math.min
@@ -35,7 +43,7 @@ import kotlin.math.sqrt
 
 private const val TAG = "LocalAudioEngine"
 private const val RECORD_SAMPLE_RATE = 16000
-private const val MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024 // 18MB safely under 20MB Gemini inline cap
+private const val MAX_INLINE_AUDIO_BYTES = 18 * 1024 * 1024
 
 data class SavedAudioClip(
     val file: File,
@@ -66,10 +74,17 @@ class LocalAudioEngine(
     private var mediaPlayer: MediaPlayer? = null
     private var progressJob: Job? = null
 
+    @Volatile
+    private var pollingIntervalMs: Long = 40L
+
     private var audioRecord: AudioRecord? = null
     private var recordJob: Job? = null
     private var recordedPcmStream: ByteArrayOutputStream? = null
     private var recordingStartMs: Long = 0L
+
+    fun setPollingIntervalMs(intervalMs: Long) {
+        pollingIntervalMs = intervalMs.coerceIn(16L, 100L)
+    }
 
     @SuppressLint("MissingPermission")
     fun startRecording(onError: (String) -> Unit) {
@@ -145,7 +160,7 @@ class LocalAudioEngine(
                         }
 
                         val now = System.currentTimeMillis()
-                        if (now - lastUiUpdate >= 55L) {
+                        if (now - lastUiUpdate >= 45L) {
                             lastUiUpdate = now
                             val rms = sqrt(sumSquares / read) / 32768.0
                             val normalized = (rms.toFloat() * 4.2f).coerceIn(0.06f, 1.0f)
@@ -157,7 +172,6 @@ class LocalAudioEngine(
                                     liveWaveform = (prev.liveWaveform.drop(1) + normalized)
                                 )
                             }
-                            // Cap live voice clone recording cleanly at 60 seconds
                             if (elapsed >= 60_000L) {
                                 break
                             }
@@ -349,7 +363,6 @@ class LocalAudioEngine(
             return
         }
 
-        // Toggle pause/resume if same track is loaded
         val current = _playbackState.value
         if (current.trackId == trackId && mediaPlayer != null) {
             togglePlayPause()
@@ -467,6 +480,68 @@ class LocalAudioEngine(
         }
     }
 
+    suspend fun saveToDeviceStorage(
+        audioFilePath: String,
+        voiceName: String
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val source = File(audioFilePath)
+        if (!source.exists()) {
+            return@withContext Result.failure(IllegalStateException("Audio file not found on device."))
+        }
+
+        val safeVoice = voiceName
+            .replace(Regex("[^A-Za-z0-9_\\-]"), "_")
+            .replace(Regex("_+"), "_")
+            .trim('_')
+            .take(28)
+            .ifBlank { "Voice" }
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+        val ext = source.extension.lowercase().ifBlank { "wav" }
+        val fileName = "VoxCraft_${safeVoice}_$stamp.$ext"
+        val mime = when (ext) {
+            "mp3" -> "audio/mpeg"
+            "m4a" -> "audio/mp4"
+            "ogg" -> "audio/ogg"
+            else -> "audio/wav"
+        }
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val values = ContentValues().apply {
+                    put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                    put(MediaStore.Downloads.MIME_TYPE, mime)
+                    put(MediaStore.Downloads.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/VoxCraft AI")
+                    put(MediaStore.Downloads.IS_PENDING, 1)
+                }
+                val resolver = context.contentResolver
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                    ?: return@withContext Result.failure(IllegalStateException("Unable to create file in Downloads."))
+
+                resolver.openOutputStream(uri)?.use { out ->
+                    FileInputStream(source).use { input ->
+                        input.copyTo(out)
+                    }
+                } ?: return@withContext Result.failure(IllegalStateException("Failed to write audio bytes."))
+
+                values.clear()
+                values.put(MediaStore.Downloads.IS_PENDING, 0)
+                resolver.update(uri, values, null, null)
+                Result.success("Downloads/VoxCraft AI/$fileName")
+            } else {
+                val targetDir = File(
+                    context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir,
+                    "VoxCraft AI"
+                ).apply { mkdirs() }
+                val dest = File(targetDir, fileName)
+                source.copyTo(dest, overwrite = true)
+                Result.success("VoxCraft AI/$fileName")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to save audio to internal storage", e)
+            Result.failure(e)
+        }
+    }
+
     fun deleteAudioFile(path: String?) {
         if (path.isNullOrBlank()) return
         try {
@@ -510,7 +585,7 @@ class LocalAudioEngine(
                 } catch (_: Exception) {
                     break
                 }
-                delay(50L)
+                delay(pollingIntervalMs)
             }
         }
     }
@@ -580,8 +655,8 @@ class LocalAudioEngine(
             putInt(chunkSize)
             put("WAVE".toByteArray(Charsets.US_ASCII))
             put("fmt ".toByteArray(Charsets.US_ASCII))
-            putInt(16) // PCM subchunk size
-            putShort(1) // PCM audio format
+            putInt(16)
+            putShort(1)
             putShort(channels.toShort())
             putInt(sampleRate)
             putInt(byteRate)

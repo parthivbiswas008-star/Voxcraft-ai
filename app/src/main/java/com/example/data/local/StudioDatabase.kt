@@ -22,6 +22,9 @@ data class ClonedVoiceEntity(
     val paceDescriptor: String,
     val timbreSummary: String,
     val accent: String,
+    val languageCode: String = "en-US",
+    val languageName: String = "English (US)",
+    val countryFlag: String = "🇺🇸",
     val tagsCsv: String,
     val defaultSpeed: Float,
     val sampleAudioPath: String,
@@ -40,6 +43,7 @@ data class GenerationEntity(
     val speed: Float,
     val volume: Float,
     val language: String,
+    val countryFlag: String = "🇺🇸",
     val audioFilePath: String,
     val durationMs: Long,
     val latencyMs: Long,
@@ -95,7 +99,7 @@ interface FavoriteVoiceDao {
         GenerationEntity::class,
         FavoriteVoiceEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class StudioDatabase : RoomDatabase() {
@@ -113,7 +117,10 @@ abstract class StudioDatabase : RoomDatabase() {
                     context.applicationContext,
                     StudioDatabase::class.java,
                     "voxcraft_studio.db"
-                ).build().also { instance = it }
+                )
+                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .build()
+                    .also { instance = it }
             }
         }
     }

@@ -18,10 +18,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.AlertDialog
@@ -54,6 +56,7 @@ import com.example.data.StudioRepository
 import com.example.data.local.GenerationEntity
 import com.example.model.AudioPlaybackState
 import com.example.ui.components.MiniVoiceSignature
+import com.example.ui.components.StudioGlassCard
 import com.example.viewmodel.StudioViewModel
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -67,9 +70,11 @@ fun HistoryScreen(
     onSearchChange: (String) -> Unit,
     onPlayGeneration: (GenerationEntity) -> Unit,
     onRemixGeneration: (GenerationEntity) -> Unit,
+    onSaveGenerationToStorage: (GenerationEntity) -> Unit,
     onShareGeneration: (GenerationEntity) -> Unit,
     onDeleteGeneration: (GenerationEntity) -> Unit,
     onGoToStudio: () -> Unit,
+    onOpenSettings: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     var pendingDelete by remember { mutableStateOf<GenerationEntity?>(null) }
@@ -80,7 +85,8 @@ fun HistoryScreen(
         else generations.filter {
             it.scriptText.lowercase().contains(q) ||
                 it.voiceName.lowercase().contains(q) ||
-                it.emotionPreset.lowercase().contains(q)
+                it.emotionPreset.lowercase().contains(q) ||
+                it.language.lowercase().contains(q)
         }
     }
 
@@ -94,16 +100,26 @@ fun HistoryScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column {
+            Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Local Audio Archive",
                     style = MaterialTheme.typography.headlineMedium,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = "${generations.size} WAV renders saved privately on device",
+                    text = "${generations.size} WAV renders • Save to Downloads or Share anytime",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.primary
+                )
+            }
+            IconButton(
+                onClick = onOpenSettings,
+                modifier = Modifier.size(44.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = "Studio settings",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -121,7 +137,7 @@ fun HistoryScreen(
                 shape = RoundedCornerShape(14.dp),
                 placeholder = {
                     Text(
-                        text = "Search transcripts, voices, or moods…",
+                        text = "Search transcripts, voices, or languages…",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -145,8 +161,8 @@ fun HistoryScreen(
                     }
                 },
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.85f),
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.85f),
                     focusedBorderColor = MaterialTheme.colorScheme.primary,
                     unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant
                 )
@@ -155,13 +171,11 @@ fun HistoryScreen(
         }
 
         if (filtered.isEmpty()) {
-            Surface(
+            StudioGlassCard(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 24.dp),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainer,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                shape = RoundedCornerShape(20.dp)
             ) {
                 Column(
                     modifier = Modifier
@@ -223,6 +237,7 @@ fun HistoryScreen(
                         isPlaying = isThisPlaying,
                         onPlayToggle = { onPlayGeneration(item) },
                         onRemix = { onRemixGeneration(item) },
+                        onSaveToStorage = { onSaveGenerationToStorage(item) },
                         onShare = { onShareGeneration(item) },
                         onRequestDelete = { pendingDelete = item }
                     )
@@ -236,7 +251,7 @@ fun HistoryScreen(
             onDismissRequest = { pendingDelete = null },
             containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
             title = { Text("Delete Audio Render?") },
-            text = { Text("Remove this WAV clip permanently from local device storage?") },
+            text = { Text("Remove this WAV clip permanently from app history?") },
             confirmButton = {
                 Button(
                     onClick = {
@@ -266,6 +281,7 @@ private fun HistoryGenerationCard(
     isPlaying: Boolean,
     onPlayToggle: () -> Unit,
     onRemix: () -> Unit,
+    onSaveToStorage: () -> Unit,
     onShare: () -> Unit,
     onRequestDelete: () -> Unit
 ) {
@@ -277,16 +293,12 @@ private fun HistoryGenerationCard(
         SimpleDateFormat("MMM d · HH:mm", Locale.getDefault()).format(Date(entity.createdAt))
     }
 
-    Surface(
+    StudioGlassCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("history_card_${entity.id}"),
         shape = RoundedCornerShape(18.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        border = BorderStroke(
-            width = if (isPlaying) 1.5.dp else 1.dp,
-            color = if (isPlaying) accent else MaterialTheme.colorScheme.outlineVariant
-        )
+        accentBorder = if (isPlaying) accent else null
     ) {
         Column(
             modifier = Modifier
@@ -325,7 +337,7 @@ private fun HistoryGenerationCard(
                 Column(modifier = Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            text = entity.voiceName,
+                            text = "${entity.countryFlag} ${entity.voiceName}",
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface,
                             maxLines = 1,
@@ -357,7 +369,7 @@ private fun HistoryGenerationCard(
                 MiniVoiceSignature(
                     peaks = peaks,
                     accentColor = accent,
-                    modifier = Modifier.width(56.dp)
+                    modifier = Modifier.width(54.dp)
                 )
             }
 
@@ -376,12 +388,12 @@ private fun HistoryGenerationCard(
             ) {
                 MetadataPill(entity.emotionPreset)
                 MetadataPill(String.format("%.2fx", entity.speed))
-                MetadataPill(entity.language)
+                MetadataPill("${entity.countryFlag} ${entity.language}")
             }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 OutlinedButton(
@@ -407,26 +419,39 @@ private fun HistoryGenerationCard(
                     )
                 }
 
-                OutlinedButton(
+                // Icon 1: Save directly to Internal Storage (Downloads/VoxCraft AI)
+                FilledIconButton(
+                    onClick = onSaveToStorage,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("history_save_${entity.id}"),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Save audio to internal storage",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+
+                // Icon 2: Share audio WAV file
+                FilledIconButton(
                     onClick = onShare,
                     modifier = Modifier
-                        .weight(1f)
-                        .height(42.dp)
+                        .size(48.dp)
                         .testTag("history_share_${entity.id}"),
-                    shape = RoundedCornerShape(12.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    )
                 ) {
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = stringResource(R.string.cd_share_audio),
-                        tint = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "Share WAV",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurface
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 

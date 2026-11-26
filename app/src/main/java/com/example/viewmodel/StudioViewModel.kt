@@ -10,19 +10,26 @@ import com.example.ai.GeminiVoiceRepository
 import com.example.audio.LiveRecordingState
 import com.example.audio.LocalAudioEngine
 import com.example.audio.SavedAudioClip
+import com.example.data.AppSettings
+import com.example.data.PerformanceMode
+import com.example.data.SettingsRepository
 import com.example.data.StudioRepository
 import com.example.data.local.ClonedVoiceEntity
 import com.example.data.local.GenerationEntity
 import com.example.data.local.StudioDatabase
 import com.example.model.AudioPlaybackState
+import com.example.model.AutoDetectLanguageOption
 import com.example.model.CloneAnalysisState
 import com.example.model.EmotionPreset
 import com.example.model.HumanizationConfig
+import com.example.model.StudioLanguage
 import com.example.model.StudioTab
 import com.example.model.StudioVoice
+import com.example.model.SupportedStudioLanguages
 import com.example.model.SynthesisUiState
 import com.example.model.VoiceCatalog
 import com.example.model.VoiceCategory
+import com.example.model.findLanguageByNameOrCode
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -45,7 +52,7 @@ import java.util.UUID
 private const val TAG = "StudioViewModel"
 
 data class PlaygroundUiState(
-    val scriptText: String = "Hey there! [warmly] Welcome to VoxCraft Studio. Dial in my pacing, layer subtle emotions, or drop a quick [laughter] right into the line—and hear lifelike speech render in real time.",
+    val scriptText: String = "[happy] Hey there! Welcome to VoxCraft Studio. [whisper] Try typing any emotion inside brackets, or switch to Hindi or Bengali—[excited] and hear lifelike speech render in real time!",
     val previousScriptBeforeHumanize: String? = null,
     val selectedVoice: StudioVoice = VoiceCatalog.toStudioVoice(VoiceCatalog.presets.first()),
     val humanization: HumanizationConfig = HumanizationConfig(),
@@ -57,13 +64,16 @@ data class PlaygroundUiState(
 
 data class CloneLabState(
     val inputModeRecord: Boolean = true,
+    val targetLanguage: StudioLanguage = AutoDetectLanguageOption,
     val capturedSample: SavedAudioClip? = null,
     val sampleSourceLabel: String = "",
     val analysisState: CloneAnalysisState = CloneAnalysisState.Idle,
     val editableCloneName: String = "",
     val editableAccent: String = "",
     val editableBaseVoice: String = "Kore",
-    val editableTagsText: String = ""
+    val editableLanguage: StudioLanguage = SupportedStudioLanguages.first(),
+    val editableTagsText: String = "",
+    val isTestingClone: Boolean = false
 )
 
 class StudioViewModel(application: Application) : AndroidViewModel(application) {
@@ -71,10 +81,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     private val audioEngine = LocalAudioEngine(application.applicationContext, viewModelScope)
     private val database = StudioDatabase.getInstance(application.applicationContext)
     private val studioRepository = StudioRepository(database, audioEngine)
+    private val settingsRepository = SettingsRepository(application.applicationContext)
     private val geminiVoiceRepository = GeminiVoiceRepository()
+
+    val appSettings: StateFlow<AppSettings> = settingsRepository.settings
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AppSettings())
 
     private val _selectedTab = MutableStateFlow(StudioTab.STUDIO)
     val selectedTab: StateFlow<StudioTab> = _selectedTab.asStateFlow()
+
+    private val _isSettingsOpen = MutableStateFlow(false)
+    val isSettingsOpen: StateFlow<Boolean> = _isSettingsOpen.asStateFlow()
 
     private val _playground = MutableStateFlow(PlaygroundUiState())
     val playground: StateFlow<PlaygroundUiState> = _playground.asStateFlow()
@@ -87,6 +104,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     private val _selectedVoiceCategory = MutableStateFlow(VoiceCategory.ALL)
     val selectedVoiceCategory: StateFlow<VoiceCategory> = _selectedVoiceCategory.asStateFlow()
+
+    private val _selectedVoiceLanguageCode = MutableStateFlow("ALL")
+    val selectedVoiceLanguageCode: StateFlow<String> = _selectedVoiceLanguageCode.asStateFlow()
 
     private val _previewingVoiceId = MutableStateFlow<String?>(null)
     val previewingVoiceId: StateFlow<String?> = _previewingVoiceId.asStateFlow()
@@ -106,14 +126,67 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val favoriteVoiceIds: StateFlow<Set<String>> = studioRepository.favoriteVoiceIds
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptySet())
 
-    private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 6)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
     private val previewCache = mutableMapOf<String, SavedAudioClip>()
     private var latencyTickerJob: Job? = null
 
+    init {
+        viewModelScope.launch {
+            appSettings.collect { settings ->
+                val pollMs = when (settings.performanceMode) {
+                    PerformanceMode.ULTRA_LOW_LATENCY -> 28L
+                    PerformanceMode.HIGH_PERFORMANCE -> 40L
+                    PerformanceMode.BALANCED -> 60L
+                }
+                audioEngine.setPollingIntervalMs(pollMs)
+            }
+        }
+    }
+
     fun selectTab(tab: StudioTab) {
         _selectedTab.value = tab
+    }
+
+    fun openSettings() {
+        _isSettingsOpen.value = true
+    }
+
+    fun closeSettings() {
+        _isSettingsOpen.value = false
+    }
+
+    // --- Settings Actions ---
+
+    fun setPerformanceMode(mode: PerformanceMode) {
+        viewModelScope.launch {
+            settingsRepository.setPerformanceMode(mode)
+        }
+    }
+
+    fun setForce144Hz(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setForce144Hz(enabled)
+        }
+    }
+
+    fun setAmoledDark(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setAmoledDark(enabled)
+        }
+    }
+
+    fun setLiquidGlass(enabled: Boolean) {
+        viewModelScope.launch {
+            settingsRepository.setLiquidGlass(enabled)
+        }
+    }
+
+    fun setGlassBlurRadius(radiusDp: Float) {
+        viewModelScope.launch {
+            settingsRepository.setGlassBlurRadius(radiusDp)
+        }
     }
 
     // --- Playground Actions ---
@@ -152,20 +225,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectVoiceForStudio(voice: StudioVoice, switchToStudio: Boolean = true) {
+        val voiceLang = findLanguageByNameOrCode(voice.languageCode)
         _playground.update { state ->
             state.copy(
                 selectedVoice = voice,
-                humanization = if (voice.isCloned) {
-                    state.humanization.copy(speed = voice.defaultSpeed.coerceIn(0.6f, 1.5f))
-                } else {
-                    state.humanization
-                }
+                humanization = state.humanization.copy(
+                    speed = if (voice.isCloned) voice.defaultSpeed.coerceIn(0.6f, 1.5f) else state.humanization.speed,
+                    languageCode = voiceLang.code,
+                    language = voiceLang.name,
+                    countryFlag = voiceLang.flag
+                )
             )
         }
         if (switchToStudio) {
             _selectedTab.value = StudioTab.STUDIO
         }
-        _snackbarEvents.tryEmit("Active voice: ${voice.displayName}")
+        _snackbarEvents.tryEmit("Active voice: ${voice.countryFlag} ${voice.displayName}")
     }
 
     fun selectClonedVoiceForStudio(clone: ClonedVoiceEntity, switchToStudio: Boolean = true) {
@@ -231,9 +306,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    fun updateLanguage(language: String) {
+    fun updateLanguage(language: StudioLanguage) {
         _playground.update {
-            it.copy(humanization = it.humanization.copy(language = language))
+            it.copy(
+                humanization = it.humanization.copy(
+                    languageCode = language.code,
+                    language = language.name,
+                    countryFlag = language.flag
+                )
+            )
         }
     }
 
@@ -269,7 +350,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         isHumanizingScript = false
                     )
                 }
-                _snackbarEvents.tryEmit("Script humanized for natural delivery")
+                _snackbarEvents.tryEmit("Script humanized with expressive cadence")
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -302,7 +383,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             latencyTickerJob?.cancel()
             latencyTickerJob = viewModelScope.launch {
                 while (isActive) {
-                    delay(80L)
+                    delay(60L)
                     _playground.update { cur ->
                         if (cur.synthesisState is SynthesisUiState.Generating) {
                             cur.copy(synthesisState = SynthesisUiState.Generating(System.currentTimeMillis() - startTime))
@@ -315,7 +396,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 val payload = geminiVoiceRepository.synthesizeSpeech(
                     script = script,
                     voice = state.selectedVoice,
-                    config = state.humanization
+                    config = state.humanization,
+                    performanceMode = appSettings.value.performanceMode
                 )
                 val savedClip = audioEngine.saveSynthesizedAudio(
                     audioBytes = payload.bytes,
@@ -334,6 +416,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     speed = state.humanization.speed,
                     volume = state.humanization.volume,
                     language = state.humanization.language,
+                    countryFlag = state.humanization.countryFlag,
                     audioFilePath = savedClip.file.absolutePath,
                     durationMs = savedClip.durationMs,
                     latencyMs = payload.latencyMs,
@@ -352,7 +435,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 audioEngine.playTrack(
                     trackId = generationId,
                     title = script.take(64),
-                    voiceName = state.selectedVoice.displayName,
+                    voiceName = "${state.humanization.countryFlag} ${state.selectedVoice.displayName}",
                     isClonedVoice = state.selectedVoice.isCloned,
                     audioFilePath = savedClip.file.absolutePath,
                     waveformPeaks = savedClip.waveformPeaks,
@@ -381,6 +464,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         _selectedVoiceCategory.value = category
     }
 
+    fun selectVoiceLanguageFilter(languageCode: String) {
+        _selectedVoiceLanguageCode.value = languageCode
+    }
+
     fun toggleFavoriteVoice(voiceId: String) {
         viewModelScope.launch {
             val isFav = favoriteVoiceIds.value.contains(voiceId)
@@ -391,12 +478,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     fun previewVoice(voice: StudioVoice, sampleText: String) {
         if (_previewingVoiceId.value != null) return
 
-        // Play cached preview immediately if available
         val cached = previewCache[voice.id]
         if (cached != null && cached.file.exists()) {
             audioEngine.playTrack(
                 trackId = "preview_${voice.id}",
-                title = "Voice Preview",
+                title = "Voice Preview • ${voice.countryFlag} ${voice.languageName}",
                 voiceName = voice.displayName,
                 isClonedVoice = voice.isCloned,
                 audioFilePath = cached.file.absolutePath,
@@ -405,7 +491,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             return
         }
 
-        // For cloned voices, if original sample audio exists we still synthesize a fresh AI preview
         viewModelScope.launch {
             _previewingVoiceId.value = voice.id
             try {
@@ -414,8 +499,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     voice = voice,
                     config = HumanizationConfig(
                         speed = voice.defaultSpeed,
-                        emotionPreset = EmotionPreset.CONVERSATIONAL
-                    )
+                        emotionPreset = EmotionPreset.CONVERSATIONAL,
+                        languageCode = voice.languageCode,
+                        language = voice.languageName,
+                        countryFlag = voice.countryFlag
+                    ),
+                    performanceMode = appSettings.value.performanceMode
                 )
                 val saved = audioEngine.saveSynthesizedAudio(
                     audioBytes = payload.bytes,
@@ -424,7 +513,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 previewCache[voice.id] = saved
                 audioEngine.playTrack(
                     trackId = "preview_${voice.id}",
-                    title = "Voice Preview",
+                    title = "Voice Preview • ${voice.countryFlag} ${voice.languageName}",
                     voiceName = voice.displayName,
                     isClonedVoice = voice.isCloned,
                     audioFilePath = saved.file.absolutePath,
@@ -460,6 +549,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         _cloneLab.update { it.copy(inputModeRecord = recordMode) }
     }
 
+    fun setCloneTargetLanguage(language: StudioLanguage) {
+        _cloneLab.update { it.copy(targetLanguage = language) }
+    }
+
     fun startCloneRecording() {
         _cloneLab.update { it.copy(analysisState = CloneAnalysisState.Idle) }
         audioEngine.startRecording { errorMsg ->
@@ -474,7 +567,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 _cloneLab.update {
                     it.copy(
                         analysisState = CloneAnalysisState.Error(
-                            "Recording was too short. Please record at least 3 seconds of clear speech."
+                            "Recording was too short. Record at least 3 seconds of clear speech."
                         )
                     )
                 }
@@ -502,7 +595,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                         analysisState = CloneAnalysisState.Idle
                     )
                 }
-                _snackbarEvents.tryEmit("Audio sample imported")
+                _snackbarEvents.tryEmit("Audio sample imported for cloning")
             }.onFailure { err ->
                 _cloneLab.update {
                     it.copy(
@@ -519,7 +612,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val sample = _cloneLab.value.capturedSample ?: return
         audioEngine.playTrack(
             trackId = "clone_sample_${sample.file.name}",
-            title = "Voice Sample Preview",
+            title = "Original Voice Sample",
             voiceName = _cloneLab.value.editableCloneName.ifBlank { "Captured Sample" },
             isClonedVoice = true,
             audioFilePath = sample.file.absolutePath,
@@ -528,26 +621,33 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun analyzeCapturedSample() {
-        val sample = _cloneLab.value.capturedSample
+        val state = _cloneLab.value
+        val sample = state.capturedSample
         if (sample == null || !sample.file.exists()) {
             _cloneLab.update {
                 it.copy(analysisState = CloneAnalysisState.Error("Record or import a voice sample first."))
             }
             return
         }
-        if (_cloneLab.value.analysisState is CloneAnalysisState.Analyzing) return
+        if (state.analysisState is CloneAnalysisState.Analyzing) return
 
         viewModelScope.launch {
             _cloneLab.update { it.copy(analysisState = CloneAnalysisState.Analyzing) }
             try {
                 val bytes = withContext(Dispatchers.IO) { sample.file.readBytes() }
-                val dna = geminiVoiceRepository.analyzeVoiceSample(bytes, sample.mimeType)
+                val dna = geminiVoiceRepository.analyzeVoiceSample(
+                    audioBytes = bytes,
+                    mimeType = sample.mimeType,
+                    preferredLanguage = state.targetLanguage
+                )
+                val resolvedLang = findLanguageByNameOrCode(dna.detectedLanguageCode)
                 _cloneLab.update {
                     it.copy(
                         analysisState = CloneAnalysisState.Ready(dna),
                         editableCloneName = dna.suggestedName,
-                        editableAccent = dna.accent,
+                        editableAccent = dna.detectedAccent,
                         editableBaseVoice = dna.closestBaseVoice,
+                        editableLanguage = resolvedLang,
                         editableTagsText = dna.tags.joinToString(", ")
                     )
                 }
@@ -566,6 +666,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         name: String? = null,
         accent: String? = null,
         baseVoice: String? = null,
+        language: StudioLanguage? = null,
         tagsText: String? = null
     ) {
         _cloneLab.update { state ->
@@ -573,8 +674,79 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 editableCloneName = name ?: state.editableCloneName,
                 editableAccent = accent ?: state.editableAccent,
                 editableBaseVoice = baseVoice ?: state.editableBaseVoice,
+                editableLanguage = language ?: state.editableLanguage,
                 editableTagsText = tagsText ?: state.editableTagsText
             )
+        }
+    }
+
+    fun testAnalyzedClone() {
+        val state = _cloneLab.value
+        val analysis = (state.analysisState as? CloneAnalysisState.Ready)?.analysis ?: return
+        if (state.isTestingClone) return
+
+        val lang = state.editableLanguage
+        val testLine = when {
+            lang.code.startsWith("bn") -> "নমস্কার! [warmly] এটা আমার ক্লোন করা ভয়েস—একদম আসল অ্যাকসেন্ট আর অনুভূতি নিয়ে কথা বলছি।"
+            lang.code.startsWith("hi") -> "नमस्ते! [warmly] यह मेरी क्लोन की गई आवाज़ है—बिल्कुल असली लहजे और अंदाज़ में।"
+            lang.code.startsWith("ta") -> "வணக்கம்! இது என் குளோன் செய்யப்பட்ட குரல், இயல்பான உச்சரிப்புடன் பேசுகிறேன்."
+            lang.code.startsWith("es") -> "¡Hola! [warmly] Esta es mi voz clonada con mi acento natural en VoxCraft Studio."
+            lang.code.startsWith("fr") -> "Bonjour ! [warmly] Voici ma voix clonée avec mon accent naturel."
+            lang.code.startsWith("ja") -> "こんにちは！[warmly] これは私のクローン音声です。自然なアクセントで話しています。"
+            else -> "Hello! [warmly] This is my cloned voice inside VoxCraft Studio, preserving my exact accent and natural rhythm."
+        }
+
+        val tempVoice = StudioVoice(
+            id = "clone_test_preview",
+            displayName = state.editableCloneName.ifBlank { analysis.suggestedName },
+            geminiVoiceName = state.editableBaseVoice.ifBlank { analysis.closestBaseVoice },
+            isCloned = true,
+            categoryLabel = "Clone Test",
+            languageCode = lang.code,
+            languageName = lang.name,
+            countryFlag = lang.flag,
+            accent = state.editableAccent.ifBlank { analysis.detectedAccent },
+            description = analysis.timbreSummary,
+            tags = analysis.tags,
+            acousticDnaPrompt = analysis.acousticDnaPrompt,
+            defaultSpeed = analysis.defaultSpeed
+        )
+
+        viewModelScope.launch {
+            _cloneLab.update { it.copy(isTestingClone = true) }
+            try {
+                val payload = geminiVoiceRepository.synthesizeSpeech(
+                    script = testLine,
+                    voice = tempVoice,
+                    config = HumanizationConfig(
+                        speed = tempVoice.defaultSpeed,
+                        languageCode = lang.code,
+                        language = lang.name,
+                        countryFlag = lang.flag
+                    ),
+                    performanceMode = appSettings.value.performanceMode
+                )
+                val saved = audioEngine.saveSynthesizedAudio(
+                    audioBytes = payload.bytes,
+                    mimeType = payload.mimeType
+                )
+                audioEngine.playTrack(
+                    trackId = "clone_test_${System.currentTimeMillis()}",
+                    title = "Clone Test • ${lang.flag} ${lang.name}",
+                    voiceName = tempVoice.displayName,
+                    isClonedVoice = true,
+                    audioFilePath = saved.file.absolutePath,
+                    waveformPeaks = saved.waveformPeaks,
+                    latencyMs = payload.latencyMs
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Clone test synthesis failed", e)
+                _snackbarEvents.tryEmit(e.message ?: "Clone test failed.")
+            } finally {
+                _cloneLab.update { it.copy(isTestingClone = false) }
+            }
         }
     }
 
@@ -583,6 +755,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val sample = state.capturedSample ?: return
         val analysis = (state.analysisState as? CloneAnalysisState.Ready)?.analysis ?: return
         val name = state.editableCloneName.trim().ifBlank { analysis.suggestedName }
+        val lang = state.editableLanguage
 
         viewModelScope.launch {
             val entity = ClonedVoiceEntity(
@@ -593,7 +766,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 pitchDescriptor = analysis.pitchDescriptor,
                 paceDescriptor = analysis.paceDescriptor,
                 timbreSummary = analysis.timbreSummary,
-                accent = state.editableAccent.trim().ifBlank { analysis.accent },
+                accent = state.editableAccent.trim().ifBlank { analysis.detectedAccent },
+                languageCode = lang.code,
+                languageName = lang.name,
+                countryFlag = lang.flag,
                 tagsCsv = state.editableTagsText.trim().ifBlank { analysis.tags.joinToString(", ") },
                 defaultSpeed = analysis.defaultSpeed,
                 sampleAudioPath = sample.file.absolutePath,
@@ -602,9 +778,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             studioRepository.saveClonedVoice(entity)
             selectClonedVoiceForStudio(entity, switchToStudio = true)
 
-            // Reset lab for next unlimited clone
-            _cloneLab.value = CloneLabState(inputModeRecord = state.inputModeRecord)
-            _snackbarEvents.tryEmit("Saved & loaded clone \"$name\" in Studio")
+            _cloneLab.value = CloneLabState(
+                inputModeRecord = state.inputModeRecord,
+                targetLanguage = state.targetLanguage
+            )
+            _snackbarEvents.tryEmit("Saved ${lang.flag} clone \"$name\" and loaded in Studio")
         }
     }
 
@@ -622,7 +800,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
-    // --- History Actions ---
+    // --- History & Export Actions ---
 
     fun updateHistorySearch(query: String) {
         _historySearchQuery.value = query
@@ -637,7 +815,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         audioEngine.playTrack(
             trackId = entity.id,
             title = entity.scriptText.take(64),
-            voiceName = entity.voiceName,
+            voiceName = "${entity.countryFlag} ${entity.voiceName}",
             isClonedVoice = entity.isClonedVoice,
             audioFilePath = entity.audioFilePath,
             waveformPeaks = StudioRepository.parsePeaks(entity.waveformPeaksCsv),
@@ -655,6 +833,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
         val preset = EmotionPreset.entries.find { it.label == entity.emotionPreset }
             ?: EmotionPreset.CONVERSATIONAL
+        val lang = findLanguageByNameOrCode(entity.language)
 
         _playground.update { state ->
             state.copy(
@@ -669,7 +848,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     surprise = preset.surprise,
                     sadness = preset.sadness,
                     intensity = preset.intensity,
-                    language = entity.language
+                    languageCode = lang.code,
+                    language = lang.name,
+                    countryFlag = lang.flag
                 )
             )
         }
@@ -681,6 +862,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         viewModelScope.launch {
             studioRepository.deleteGeneration(entity)
             _snackbarEvents.tryEmit("Deleted audio clip")
+        }
+    }
+
+    fun saveAudioToDevice(audioFilePath: String, voiceName: String) {
+        viewModelScope.launch {
+            val result = audioEngine.saveToDeviceStorage(audioFilePath, voiceName)
+            result.onSuccess { savedLocation ->
+                _snackbarEvents.tryEmit("Saved to $savedLocation")
+            }.onFailure { err ->
+                _snackbarEvents.tryEmit(err.message ?: "Failed to save audio to internal storage.")
+            }
         }
     }
 

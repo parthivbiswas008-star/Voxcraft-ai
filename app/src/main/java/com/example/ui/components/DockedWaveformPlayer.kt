@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
@@ -37,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.R
 import com.example.model.AudioPlaybackState
+import com.example.ui.theme.LocalStudioAppearance
 import com.example.viewmodel.StudioViewModel
 
 @Composable
@@ -45,24 +47,32 @@ fun DockedWaveformPlayer(
     onTogglePlayPause: () -> Unit,
     onSeek: (Float) -> Unit,
     onToggleLoop: () -> Unit,
+    onSaveToDevice: () -> Unit,
     onShare: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val appearance = LocalStudioAppearance.current
+    val playerBg = if (appearance.liquidGlassEnabled) {
+        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.86f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .testTag("docked_waveform_player"),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+        shape = RoundedCornerShape(22.dp),
+        color = playerBg,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.42f)),
         tonalElevation = 6.dp
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .padding(horizontal = 14.dp, vertical = 10.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -123,7 +133,7 @@ fun DockedWaveformPlayer(
                 IconButton(
                     onClick = onClose,
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .testTag("player_close_button")
                 ) {
                     Icon(
@@ -157,7 +167,7 @@ fun DockedWaveformPlayer(
                     )
                 }
 
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(10.dp))
 
                 InteractiveWaveformVisualizer(
                     peaks = playback.waveformPeaks,
@@ -168,12 +178,12 @@ fun DockedWaveformPlayer(
                     modifier = Modifier.weight(1f)
                 )
 
-                Spacer(modifier = Modifier.width(6.dp))
+                Spacer(modifier = Modifier.width(4.dp))
 
                 IconButton(
                     onClick = onToggleLoop,
                     modifier = Modifier
-                        .size(48.dp)
+                        .size(44.dp)
                         .testTag("player_loop_button")
                 ) {
                     Icon(
@@ -184,10 +194,26 @@ fun DockedWaveformPlayer(
                         } else {
                             MaterialTheme.colorScheme.onSurfaceVariant
                         },
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
 
+                // Save directly to Internal Storage (Downloads/VoxCraft AI)
+                IconButton(
+                    onClick = onSaveToDevice,
+                    modifier = Modifier
+                        .size(48.dp)
+                        .testTag("player_save_storage_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Download,
+                        contentDescription = "Save audio to internal storage",
+                        tint = MaterialTheme.colorScheme.tertiary,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+
+                // Share WAV file to any app
                 IconButton(
                     onClick = onShare,
                     modifier = Modifier
@@ -197,7 +223,7 @@ fun DockedWaveformPlayer(
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = stringResource(R.string.cd_share_audio),
-                        tint = MaterialTheme.colorScheme.onSurface,
+                        tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.size(20.dp)
                     )
                 }

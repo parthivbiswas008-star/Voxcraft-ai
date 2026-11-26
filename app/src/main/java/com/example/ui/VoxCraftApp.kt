@@ -3,6 +3,8 @@ package com.example.ui
 import android.content.Intent
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -45,6 +47,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -52,7 +55,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.model.StudioTab
 import com.example.ui.components.DockedWaveformPlayer
+import com.example.ui.components.StudioAmbientBackdrop
 import com.example.ui.screens.HistoryScreen
+import com.example.ui.screens.SettingsDialog
 import com.example.ui.screens.StudioPlaygroundScreen
 import com.example.ui.screens.VoiceCloneLabScreen
 import com.example.ui.screens.VoiceLibraryScreen
@@ -74,11 +79,15 @@ private val StudioNavItems = listOf(
 
 @Composable
 fun VoxCraftApp(
-    viewModel: StudioViewModel
+    viewModel: StudioViewModel,
+    activeRefreshRateHz: Float,
+    maxSupportedHz: Float
 ) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
 
+    val appSettings by viewModel.appSettings.collectAsStateWithLifecycle()
+    val isSettingsOpen by viewModel.isSettingsOpen.collectAsStateWithLifecycle()
     val selectedTab by viewModel.selectedTab.collectAsStateWithLifecycle()
     val playgroundState by viewModel.playground.collectAsStateWithLifecycle()
     val cloneLabState by viewModel.cloneLab.collectAsStateWithLifecycle()
@@ -89,6 +98,7 @@ fun VoxCraftApp(
     val favoriteVoiceIds by viewModel.favoriteVoiceIds.collectAsStateWithLifecycle()
     val voiceSearch by viewModel.voiceSearchQuery.collectAsStateWithLifecycle()
     val voiceCategory by viewModel.selectedVoiceCategory.collectAsStateWithLifecycle()
+    val voiceLangCode by viewModel.selectedVoiceLanguageCode.collectAsStateWithLifecycle()
     val previewingVoiceId by viewModel.previewingVoiceId.collectAsStateWithLifecycle()
     val historySearch by viewModel.historySearchQuery.collectAsStateWithLifecycle()
 
@@ -98,9 +108,12 @@ fun VoxCraftApp(
         }
     }
 
-    // Back press on secondary tabs returns gracefully to Studio Playground
-    BackHandler(enabled = selectedTab != StudioTab.STUDIO) {
-        viewModel.selectTab(StudioTab.STUDIO)
+    BackHandler(enabled = selectedTab != StudioTab.STUDIO || isSettingsOpen) {
+        if (isSettingsOpen) {
+            viewModel.closeSettings()
+        } else {
+            viewModel.selectTab(StudioTab.STUDIO)
+        }
     }
 
     fun launchShareAudio(path: String, title: String) {
@@ -110,46 +123,102 @@ fun VoxCraftApp(
         }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val useNavRail = maxWidth >= 640.dp
+    Box(modifier = Modifier.fillMaxSize()) {
+        // Liquid Glass blurred ambient studio backdrop / AMOLED true black canvas
+        StudioAmbientBackdrop()
 
-        Scaffold(
-            modifier = Modifier.fillMaxSize(),
-            containerColor = MaterialTheme.colorScheme.background,
-            contentWindowInsets = WindowInsets.safeDrawing,
-            snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
-            bottomBar = {
-                if (!useNavRail) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        AnimatedVisibility(
-                            visible = playbackState.audioFilePath != null,
-                            enter = slideInVertically { it } + fadeIn(),
-                            exit = slideOutVertically { it } + fadeOut()
-                        ) {
-                            DockedWaveformPlayer(
-                                playback = playbackState,
-                                onTogglePlayPause = viewModel::togglePlayPause,
-                                onSeek = viewModel::seekPlayback,
-                                onToggleLoop = viewModel::toggleLoop,
-                                onShare = {
-                                    playbackState.audioFilePath?.let { path ->
-                                        launchShareAudio(path, playbackState.voiceName)
-                                    }
-                                },
-                                onClose = viewModel::stopPlayback
-                            )
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val useNavRail = maxWidth >= 640.dp
+            val navBarColor = if (appSettings.liquidGlassEnabled) {
+                MaterialTheme.colorScheme.surface.copy(alpha = 0.84f)
+            } else {
+                MaterialTheme.colorScheme.surface
+            }
+
+            Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                containerColor = Color.Transparent,
+                contentWindowInsets = WindowInsets.safeDrawing,
+                snackbarHost = { SnackbarHost(hostState = snackbarHostState) },
+                bottomBar = {
+                    if (!useNavRail) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            AnimatedVisibility(
+                                visible = playbackState.audioFilePath != null,
+                                enter = slideInVertically { it } + fadeIn(),
+                                exit = slideOutVertically { it } + fadeOut()
+                            ) {
+                                DockedWaveformPlayer(
+                                    playback = playbackState,
+                                    onTogglePlayPause = viewModel::togglePlayPause,
+                                    onSeek = viewModel::seekPlayback,
+                                    onToggleLoop = viewModel::toggleLoop,
+                                    onSaveToDevice = {
+                                        playbackState.audioFilePath?.let { path ->
+                                            viewModel.saveAudioToDevice(path, playbackState.voiceName)
+                                        }
+                                    },
+                                    onShare = {
+                                        playbackState.audioFilePath?.let { path ->
+                                            launchShareAudio(path, playbackState.voiceName)
+                                        }
+                                    },
+                                    onClose = viewModel::stopPlayback
+                                )
+                            }
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            NavigationBar(
+                                containerColor = navBarColor,
+                                tonalElevation = 0.dp
+                            ) {
+                                StudioNavItems.forEach { item ->
+                                    val isSelected = selectedTab == item.tab
+                                    NavigationBarItem(
+                                        selected = isSelected,
+                                        onClick = { viewModel.selectTab(item.tab) },
+                                        modifier = Modifier.testTag("nav_tab_${item.tab.name.lowercase()}"),
+                                        icon = {
+                                            Icon(
+                                                imageVector = if (isSelected) item.selectedIcon else item.unselectedIcon,
+                                                contentDescription = item.label
+                                            )
+                                        },
+                                        label = {
+                                            Text(
+                                                text = item.label,
+                                                style = MaterialTheme.typography.labelSmall
+                                            )
+                                        },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            selectedIconColor = MaterialTheme.colorScheme.primary,
+                                            selectedTextColor = MaterialTheme.colorScheme.primary,
+                                            indicatorColor = MaterialTheme.colorScheme.primaryContainer,
+                                            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    )
+                                }
+                            }
                         }
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                        NavigationBar(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            tonalElevation = 0.dp
+                    }
+                }
+            ) { innerPadding ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    if (useNavRail) {
+                        NavigationRail(
+                            containerColor = navBarColor,
+                            modifier = Modifier.fillMaxHeight()
                         ) {
                             StudioNavItems.forEach { item ->
                                 val isSelected = selectedTab == item.tab
-                                NavigationBarItem(
+                                NavigationRailItem(
                                     selected = isSelected,
                                     onClick = { viewModel.selectTab(item.tab) },
-                                    modifier = Modifier.testTag("nav_tab_${item.tab.name.lowercase()}"),
+                                    modifier = Modifier.testTag("nav_rail_${item.tab.name.lowercase()}"),
                                     icon = {
                                         Icon(
                                             imageVector = if (isSelected) item.selectedIcon else item.unselectedIcon,
@@ -162,7 +231,7 @@ fun VoxCraftApp(
                                             style = MaterialTheme.typography.labelSmall
                                         )
                                     },
-                                    colors = NavigationBarItemDefaults.colors(
+                                    colors = NavigationRailItemDefaults.colors(
                                         selectedIconColor = MaterialTheme.colorScheme.primary,
                                         selectedTextColor = MaterialTheme.colorScheme.primary,
                                         indicatorColor = MaterialTheme.colorScheme.primaryContainer,
@@ -172,146 +241,151 @@ fun VoxCraftApp(
                                 )
                             }
                         }
+                        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     }
-                }
-            }
-        ) { innerPadding ->
-            Row(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            ) {
-                if (useNavRail) {
-                    NavigationRail(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        modifier = Modifier.fillMaxHeight()
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
                     ) {
-                        StudioNavItems.forEach { item ->
-                            val isSelected = selectedTab == item.tab
-                            NavigationRailItem(
-                                selected = isSelected,
-                                onClick = { viewModel.selectTab(item.tab) },
-                                modifier = Modifier.testTag("nav_rail_${item.tab.name.lowercase()}"),
-                                icon = {
-                                    Icon(
-                                        imageVector = if (isSelected) item.selectedIcon else item.unselectedIcon,
-                                        contentDescription = item.label
-                                    )
-                                },
-                                label = {
-                                    Text(
-                                        text = item.label,
-                                        style = MaterialTheme.typography.labelSmall
-                                    )
-                                },
-                                colors = NavigationRailItemDefaults.colors(
-                                    selectedIconColor = MaterialTheme.colorScheme.primary,
-                                    selectedTextColor = MaterialTheme.colorScheme.primary,
-                                    indicatorColor = MaterialTheme.colorScheme.primaryContainer,
-                                    unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            )
-                        }
-                    }
-                    VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                }
-
-                Column(modifier = Modifier.weight(1f).fillMaxHeight()) {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        when (selectedTab) {
-                            StudioTab.STUDIO -> StudioPlaygroundScreen(
-                                state = playgroundState,
-                                clonedVoicesCount = clonedVoices.size,
-                                onScriptChange = viewModel::updateScript,
-                                onInsertCue = viewModel::insertInlineCue,
-                                onClearScript = viewModel::clearScript,
-                                onUndoScript = viewModel::undoScriptChange,
-                                onAutoHumanize = viewModel::autoHumanizeScript,
-                                onOpenVoicePicker = { viewModel.selectTab(StudioTab.VOICES) },
-                                onOpenCloneLab = { viewModel.selectTab(StudioTab.CLONE) },
-                                onToggleHumanizationExpanded = viewModel::toggleHumanizationExpanded,
-                                onSpeedChange = viewModel::updateSpeed,
-                                onVolumeChange = viewModel::updateVolume,
-                                onSelectEmotionPreset = viewModel::selectEmotionPreset,
-                                onEmotionAxisChange = viewModel::updateEmotionAxis,
-                                onToggleNaturalBreaths = viewModel::toggleNaturalBreaths,
-                                onLanguageChange = viewModel::updateLanguage,
-                                onGenerateSpeech = viewModel::generateSpeech,
-                                onDismissError = viewModel::dismissSynthesisError
-                            )
-
-                            StudioTab.VOICES -> VoiceLibraryScreen(
-                                selectedVoiceId = playgroundState.selectedVoice.id,
-                                clonedVoices = clonedVoices,
-                                favoriteVoiceIds = favoriteVoiceIds,
-                                searchQuery = voiceSearch,
-                                selectedCategory = voiceCategory,
-                                previewingVoiceId = previewingVoiceId,
-                                toStudioVoice = viewModel::toStudioVoice,
-                                onSearchChange = viewModel::updateVoiceSearch,
-                                onCategoryChange = viewModel::selectVoiceCategory,
-                                onToggleFavorite = viewModel::toggleFavoriteVoice,
-                                onPreviewVoice = viewModel::previewVoice,
-                                onUseVoice = { voice -> viewModel.selectVoiceForStudio(voice, switchToStudio = true) },
-                                onDeleteClone = viewModel::deleteClonedVoice,
-                                onOpenCloneLab = { viewModel.selectTab(StudioTab.CLONE) }
-                            )
-
-                            StudioTab.CLONE -> VoiceCloneLabScreen(
-                                state = cloneLabState,
-                                recordingState = recordingState,
-                                savedClones = clonedVoices,
-                                onSelectInputMode = viewModel::setCloneInputMode,
-                                onStartRecording = viewModel::startCloneRecording,
-                                onStopRecording = viewModel::stopCloneRecording,
-                                onImportAudioUri = viewModel::importCloneAudioUri,
-                                onPlayCapturedSample = viewModel::playCapturedCloneSample,
-                                onClearSample = viewModel::clearCapturedSample,
-                                onAnalyzeSample = viewModel::analyzeCapturedSample,
-                                onUpdateCloneFields = viewModel::updateEditableCloneFields,
-                                onSaveClone = viewModel::saveClonedVoice,
-                                onUseSavedClone = { clone -> viewModel.selectClonedVoiceForStudio(clone, switchToStudio = true) }
-                            )
-
-                            StudioTab.HISTORY -> HistoryScreen(
-                                generations = generations,
-                                playbackState = playbackState,
-                                searchQuery = historySearch,
-                                onSearchChange = viewModel::updateHistorySearch,
-                                onPlayGeneration = viewModel::playGeneration,
-                                onRemixGeneration = viewModel::remixGenerationInStudio,
-                                onShareGeneration = { gen ->
-                                    launchShareAudio(gen.audioFilePath, gen.voiceName)
-                                },
-                                onDeleteGeneration = viewModel::deleteGeneration,
-                                onGoToStudio = { viewModel.selectTab(StudioTab.STUDIO) }
-                            )
-                        }
-                    }
-
-                    if (useNavRail) {
-                        AnimatedVisibility(
-                            visible = playbackState.audioFilePath != null,
-                            enter = slideInVertically { it } + fadeIn(),
-                            exit = slideOutVertically { it } + fadeOut()
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxWidth()
                         ) {
-                            DockedWaveformPlayer(
-                                playback = playbackState,
-                                onTogglePlayPause = viewModel::togglePlayPause,
-                                onSeek = viewModel::seekPlayback,
-                                onToggleLoop = viewModel::toggleLoop,
-                                onShare = {
-                                    playbackState.audioFilePath?.let { path ->
-                                        launchShareAudio(path, playbackState.voiceName)
-                                    }
-                                },
-                                onClose = viewModel::stopPlayback
-                            )
+                            Crossfade(
+                                targetState = selectedTab,
+                                animationSpec = tween(durationMillis = 180),
+                                label = "studio_tab_crossfade"
+                            ) { tab ->
+                                when (tab) {
+                                    StudioTab.STUDIO -> StudioPlaygroundScreen(
+                                        state = playgroundState,
+                                        appSettings = appSettings,
+                                        activeRefreshRateHz = activeRefreshRateHz,
+                                        clonedVoicesCount = clonedVoices.size,
+                                        onScriptChange = viewModel::updateScript,
+                                        onInsertCue = viewModel::insertInlineCue,
+                                        onClearScript = viewModel::clearScript,
+                                        onUndoScript = viewModel::undoScriptChange,
+                                        onAutoHumanize = viewModel::autoHumanizeScript,
+                                        onOpenVoicePicker = { viewModel.selectTab(StudioTab.VOICES) },
+                                        onOpenCloneLab = { viewModel.selectTab(StudioTab.CLONE) },
+                                        onOpenSettings = viewModel::openSettings,
+                                        onToggleHumanizationExpanded = viewModel::toggleHumanizationExpanded,
+                                        onSpeedChange = viewModel::updateSpeed,
+                                        onVolumeChange = viewModel::updateVolume,
+                                        onSelectEmotionPreset = viewModel::selectEmotionPreset,
+                                        onEmotionAxisChange = viewModel::updateEmotionAxis,
+                                        onToggleNaturalBreaths = viewModel::toggleNaturalBreaths,
+                                        onLanguageChange = viewModel::updateLanguage,
+                                        onGenerateSpeech = viewModel::generateSpeech,
+                                        onDismissError = viewModel::dismissSynthesisError
+                                    )
+
+                                    StudioTab.VOICES -> VoiceLibraryScreen(
+                                        selectedVoiceId = playgroundState.selectedVoice.id,
+                                        clonedVoices = clonedVoices,
+                                        favoriteVoiceIds = favoriteVoiceIds,
+                                        searchQuery = voiceSearch,
+                                        selectedCategory = voiceCategory,
+                                        selectedLanguageCode = voiceLangCode,
+                                        previewingVoiceId = previewingVoiceId,
+                                        toStudioVoice = viewModel::toStudioVoice,
+                                        onSearchChange = viewModel::updateVoiceSearch,
+                                        onCategoryChange = viewModel::selectVoiceCategory,
+                                        onLanguageFilterChange = viewModel::selectVoiceLanguageFilter,
+                                        onToggleFavorite = viewModel::toggleFavoriteVoice,
+                                        onPreviewVoice = viewModel::previewVoice,
+                                        onUseVoice = { voice -> viewModel.selectVoiceForStudio(voice, switchToStudio = true) },
+                                        onDeleteClone = viewModel::deleteClonedVoice,
+                                        onOpenCloneLab = { viewModel.selectTab(StudioTab.CLONE) },
+                                        onOpenSettings = viewModel::openSettings
+                                    )
+
+                                    StudioTab.CLONE -> VoiceCloneLabScreen(
+                                        state = cloneLabState,
+                                        recordingState = recordingState,
+                                        savedClones = clonedVoices,
+                                        onSelectInputMode = viewModel::setCloneInputMode,
+                                        onSelectTargetLanguage = viewModel::setCloneTargetLanguage,
+                                        onStartRecording = viewModel::startCloneRecording,
+                                        onStopRecording = viewModel::stopCloneRecording,
+                                        onImportAudioUri = viewModel::importCloneAudioUri,
+                                        onPlayCapturedSample = viewModel::playCapturedCloneSample,
+                                        onClearSample = viewModel::clearCapturedSample,
+                                        onAnalyzeSample = viewModel::analyzeCapturedSample,
+                                        onUpdateCloneFields = viewModel::updateEditableCloneFields,
+                                        onTestAnalyzedClone = viewModel::testAnalyzedClone,
+                                        onSaveClone = viewModel::saveClonedVoice,
+                                        onUseSavedClone = { clone -> viewModel.selectClonedVoiceForStudio(clone, switchToStudio = true) },
+                                        onOpenSettings = viewModel::openSettings
+                                    )
+
+                                    StudioTab.HISTORY -> HistoryScreen(
+                                        generations = generations,
+                                        playbackState = playbackState,
+                                        searchQuery = historySearch,
+                                        onSearchChange = viewModel::updateHistorySearch,
+                                        onPlayGeneration = viewModel::playGeneration,
+                                        onRemixGeneration = viewModel::remixGenerationInStudio,
+                                        onSaveGenerationToStorage = { gen ->
+                                            viewModel.saveAudioToDevice(gen.audioFilePath, gen.voiceName)
+                                        },
+                                        onShareGeneration = { gen ->
+                                            launchShareAudio(gen.audioFilePath, gen.voiceName)
+                                        },
+                                        onDeleteGeneration = viewModel::deleteGeneration,
+                                        onGoToStudio = { viewModel.selectTab(StudioTab.STUDIO) },
+                                        onOpenSettings = viewModel::openSettings
+                                    )
+                                }
+                            }
+                        }
+
+                        if (useNavRail) {
+                            AnimatedVisibility(
+                                visible = playbackState.audioFilePath != null,
+                                enter = slideInVertically { it } + fadeIn(),
+                                exit = slideOutVertically { it } + fadeOut()
+                            ) {
+                                DockedWaveformPlayer(
+                                    playback = playbackState,
+                                    onTogglePlayPause = viewModel::togglePlayPause,
+                                    onSeek = viewModel::seekPlayback,
+                                    onToggleLoop = viewModel::toggleLoop,
+                                    onSaveToDevice = {
+                                        playbackState.audioFilePath?.let { path ->
+                                            viewModel.saveAudioToDevice(path, playbackState.voiceName)
+                                        }
+                                    },
+                                    onShare = {
+                                        playbackState.audioFilePath?.let { path ->
+                                            launchShareAudio(path, playbackState.voiceName)
+                                        }
+                                    },
+                                    onClose = viewModel::stopPlayback
+                                )
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    if (isSettingsOpen) {
+        SettingsDialog(
+            settings = appSettings,
+            activeRefreshRateHz = activeRefreshRateHz,
+            maxSupportedHz = maxSupportedHz,
+            onSelectPerformanceMode = viewModel::setPerformanceMode,
+            onToggleForce144Hz = viewModel::setForce144Hz,
+            onToggleAmoledDark = viewModel::setAmoledDark,
+            onToggleLiquidGlass = viewModel::setLiquidGlass,
+            onGlassBlurChange = viewModel::setGlassBlurRadius,
+            onDismiss = viewModel::closeSettings
+        )
     }
 }
